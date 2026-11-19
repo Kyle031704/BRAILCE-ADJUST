@@ -1,0 +1,265 @@
+"""
+Brailce Mode – AI Assistant (Stub)
+=====================================
+
+STUB for Phase 1 — full implementation in Phase 7.
+
+AI Assistant Mode accepts natural-language queries and sends them
+to a locally hosted Ollama LLM for offline AI responses.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import re
+import threading
+import time
+from typing import Optional
+
+from brailce.core.events import AppMode, EventType, InputEvent
+from brailce.modes.base_mode import BaseMode
+from brailce.utils.validation import validate_ai_query
+
+logger = logging.getLogger(__name__)
+
+
+# Common Filipino AI greetings and answers for offline instant playback
+FILIPINO_AI_OFFLINE_RESPONSES = {
+    "kumusta": "Mabuti naman ako! Masaya akong makasama ka sa pag-aaral ng Braille.",
+    "kumusta ka": "Mabuti naman ako! Masaya akong makasama ka sa pag-aaral ng Braille.",
+    "ano ang pangalan mo": "Ako si Brailce, ang iyong matalinong katulong sa pag-aaral ng Braille.",
+    "sino ka": "Ako si Brailce, ang iyong matalinong katulong sa pag-aaral ng Braille.",
+    "magandang umaga": "Magandang umaga sa iyo! Handa ka na bang mag-aral?",
+    "magandang hapon": "Magandang hapon sa iyo!",
+    "magandang gabi": "Magandang gabi sa iyo!",
+    "salamat": "Walang anuman! Masaya akong makatulong sa iyo.",
+    "tulong": "Narito ako upang tulungan ka sa pagbasa at pagsulat ng Braille.",
+    "ano ang braille": "Ang Braille ay isang sistema ng pagbasa at pagsulat gamit ang mga nakataas na tuldok para sa mga bulag.",
+    "sino ang gumawa ng braille": "Si Louis Braille ang lumikha ng sistemang Braille noong taong 1824.",
+    "sino nag imbento ng braille": "Si Louis Braille ang nag-imbento ng sistemang Braille noong 1824 sa Pransya.",
+    "sino si louis braille": "Si Louis Braille ay isang Pranses na tagapagturo na lumikha ng sistemang Braille para sa mga bulag.",
+    "kailan naimbento ang braille": "Naimbento ang sistemang Braille noong taong 1824.",
+    "ano ang grade 1 braille": "Ang Grade 1 Braille ay titik-sa-titik na pagsasalin kung saan bawat karakter ay may katumbas na titik nang walang pagpapaikli.",
+    "ilang tuldok mayroon sa isang braille cell": "Mayroong anim na nakataas na tuldok ang isang karaniwang Braille cell sa dalawang hanay.",
+    "ano ang buwan": "Ang Buwan ay ang likas na satelayt na umiikot sa planetang Daigdig.",
+    "ano ang araw": "Ang Araw ay ang bituin sa gitna ng ating sistemang solar na nagbibigay ng liwanag at init.",
+    "ano ang pambansang ibon ng pilipinas": "Ang Agila ng Pilipinas ang ating pambansang ibon.",
+    "ano ang pambansang bayani ng pilipinas": "Si Doktor Jose Rizal ang ating pambansang bayani.",
+    "ano ang pambansang bulaklak ng pilipinas": "Ang Sampaguita ang pambansang bulaklak ng Pilipinas.",
+    "ano ang kabisera ng pilipinas": "Ang Maynila ang kabisera ng Pilipinas.",
+    "ilan ang titik sa alpabetong filipino": "Mayroong 28 titik sa modernong alpabetong Filipino.",
+    "ano ang brailce": "Ang Brailce ay isang kagamitan at katulong sa pag-aaral ng Braille.",
+    "paano magbasa ng braille": "Binabasa ang Braille gamit ang mga dulo ng daliri sa pamamagitan ng pagdama sa mga nakataas na tuldok.",
+}
+
+
+# Grade 1 Braille / UEB: Letters A-J correspond directly to numbers 1-0 under the # indicator
+BRAILLE_LETTER_TO_NUMBER = {
+    "A": ("1", "one"),
+    "B": ("2", "two"),
+    "C": ("3", "three"),
+    "D": ("4", "four"),
+    "E": ("5", "five"),
+    "F": ("6", "six"),
+    "G": ("7", "seven"),
+    "H": ("8", "eight"),
+    "I": ("9", "nine"),
+    "J": ("0", "zero"),
+}
+
+
+class AIAssistantMode(BaseMode):
+    """
+    AI Assistant Mode – text query → Ollama → response → speech.
+    Supports '#' number sign to enter digits using keys A-J.
+    """
+
+    @property
+    def filipino_engine(self):
+        if not hasattr(self, "_filipino_engine") or self._filipino_engine is None:
+            from brailce.speech.filipino_engine import FilipinoEngine
+            self._filipino_engine = FilipinoEngine(fallback_speech=self.app.speech)
+        return self._filipino_engine
+
+    @property
+    def mode_type(self) -> AppMode:
+        return AppMode.AI_ASSISTANT
+
+    @property
+    def display_name(self) -> str:
+        return "AI Assistant Mode"
+
+    def handle_event(self, event: InputEvent) -> None:
+        """Process an input event in AI Assistant Mode."""
+        if self.state.ai_processing:
+            # Ignore inputs while processing
+            return
+
+        if event.event_type == EventType.CHARACTER_PRESSED and event.character:
+            self._handle_character(event.character)
+        elif event.event_type == EventType.SPACE_PRESSED:
+            if self.state.number_mode:
+                self.state.number_mode = False
+            self._handle_character(" ")
+        elif event.event_type == EventType.BACKSPACE_PRESSED:
+            self._handle_backspace()
+        elif event.event_type == EventType.CLEAR_PRESSED:
+            self._handle_clear()
+        elif event.event_type == EventType.ENTER_PRESSED:
+            self._handle_enter()
+        elif event.event_type == EventType.LANGUAGE_TOGGLE:
+            if hasattr(self.app, "toggle_language"):
+                self.app.toggle_language()
+
+    def _handle_character(self, character: str) -> None:
+        # 1. Number Indicator (#) Toggle
+        if character == "#":
+            is_active = self.state.toggle_number_mode()
+            if self.app.display:
+                self.app.display.show_character("# (Number Sign)")
+                self.app.display.show_status("Number Mode: ON (A-J -> 1-0)" if is_active else "Number Mode: OFF")
+            if self.app.speech:
+                self.app.speech.speak_character("#")
+            return
+
+        # 2. Number Mode Active: Translate A-J to 1-0
+        speech_override = None
+        if self.state.number_mode:
+            char_upper = character.upper()
+            if char_upper in BRAILLE_LETTER_TO_NUMBER:
+                digit, speech_val = BRAILLE_LETTER_TO_NUMBER[char_upper]
+                character = digit
+                speech_override = digit
+            elif char_upper in "KLMNOPQRSTUVWXYZ":
+                self.state.number_mode = False
+
+        # Check if space pressed to pronounce the word just completed
+        last_word = ""
+        if character == " ":
+            current_buf = self.state.ai_query_buffer
+            if current_buf and not current_buf.endswith(" "):
+                words = current_buf.split()
+                last_word = words[-1] if words else ""
+
+        self.state.append_ai_character(character)
+        if self.app.display:
+            self.app.display.show_character("Space" if character == " " else character)
+            self.app.display.show_text_buffer(self.state.ai_query_buffer)
+        if self.app.speech:
+            if character == " ":
+                if last_word:
+                    self.app.speech.speak_word_clean(last_word)
+            elif speech_override:
+                self.app.speech.speak_character(speech_override)
+            elif self.app.config.get("speech", "speak_each_character", default=True):
+                mapping = self.app.encoder.encode(character) if self.app.encoder else None
+                char_val = mapping.character if mapping else character
+                self.app.speech.speak_character(char_val)
+
+    def _handle_backspace(self) -> None:
+        """Handle backspace silently without clicks, beeps, or vocal announcements."""
+        if not self.state.ai_query_buffer:
+            if self.app.display:
+                from brailce.i18n.strings import get_string
+                self.app.display.show_status(get_string("BUFFER_EMPTY", self.state.language))
+            return
+
+        self.state.ai_query_buffer = self.state.ai_query_buffer[:-1]
+        if self.app.display:
+            self.app.display.show_character("Backspace")
+            self.app.display.show_text_buffer(self.state.ai_query_buffer)
+
+    def _handle_clear(self) -> None:
+        """Handle clear button press."""
+        self.state.clear_ai_buffer()
+        if self.app.display:
+            self.app.display.show_character("Cleared")
+            self.app.display.show_text_buffer("")
+        if self.app.speech and self.app.config.get("speech", "speak_control_events", default=False):
+            from brailce.i18n.strings import get_string
+            self.app.speech.speak_text(get_string("CLEARED", self.state.language), interrupt=True)
+
+    def _handle_enter(self) -> None:
+        """Submit the accumulated query to Ollama and speak response."""
+        query = self.state.get_ai_query()
+
+        valid, msg = validate_ai_query(query)
+        if not valid:
+            if self.app.display:
+                self.app.display.show_error(msg)
+            if self.app.speech:
+                self.app.speech.speak_text(msg, interrupt=False)
+            # Restore query buffer if invalid (so user can edit it)
+            self.state.ai_query_buffer = query
+            return
+
+        self.state.ai_processing = True
+        if self.app.display:
+            self.app.display.show_ai_processing(query)
+
+        if self.app.speech:
+            self.app.speech.speak_sentence(query, interrupt=False)
+
+        # Start background thread for Ollama inference
+        threading.Thread(target=self._process_query, args=(query,), daemon=True).start()
+
+    def _process_query(self, query: str) -> None:
+        from brailce.i18n.strings import get_string
+        lang = self.state.language
+
+        if self.app.speech:
+            self.app.speech.speak_text(get_string("AI_THINKING", lang), interrupt=False)
+
+        # Check for pre-cached offline Filipino AI responses
+        if lang == "fil":
+            clean_q = re.sub(r"[^a-zA-Z0-9\s]", "", query.replace("-", " ")).strip().lower()
+            clean_q = " ".join(clean_q.split())
+            if clean_q in FILIPINO_AI_OFFLINE_RESPONSES:
+                resp = FILIPINO_AI_OFFLINE_RESPONSES[clean_q]
+                logger.info("AI: Instant offline response matched for '%s'", clean_q)
+                self._finish_processing(resp, query=query)
+                return
+
+        if not hasattr(self.app, "ai_client") or not self.app.ai_client:
+            self._finish_processing(get_string("AI_UNAVAILABLE", lang), query=query)
+            return
+
+        response = self.app.ai_client.generate(query, language=lang)
+        if not response:
+            self._finish_processing(get_string("AI_UNAVAILABLE", lang), query=query)
+        else:
+            self._finish_processing(response, query=query)
+
+    def _finish_processing(self, response: str, query: str = "") -> None:
+        self.state.ai_processing = False
+        from brailce.ai.ollama_client import clean_ai_response
+        cleaned = clean_ai_response(response) if response else response
+        final_resp = cleaned if cleaned else response
+        self.state.ai_last_response = final_resp
+        if self.app.display:
+            self.app.display.show_ai_response(final_resp)
+        if self.app.speech:
+            time.sleep(0.40)  # ~400ms natural prosody pause between query and answer
+            if getattr(self.state, "language", "en") == "fil":
+                self.app.speech.speak_response_text(final_resp, interrupt=False, allow_ai_cache=True, lang="fil")
+            else:
+                self.app.speech.speak_response_text(final_resp, interrupt=False, lang="en")
+
+    def on_enter(self) -> None:
+        logger.info("Entered AI Assistant Mode.")
+        self.state.clear_ai_buffer()
+        self.state.ai_processing = False
+        if self.app.display:
+            if hasattr(self.app.display, "_current_query"):
+                self.app.display._current_query = ""
+            self.app.display.show_mode(self.mode_type)
+            self.app.display.show_text_buffer("")
+
+    def on_exit(self) -> None:
+        logger.info("Exited AI Assistant Mode.")
+        self.state.clear_ai_buffer()
+        self.state.ai_processing = False
+        if self.app.display:
+            if hasattr(self.app.display, "_current_query"):
+                self.app.display._current_query = ""

@@ -1,0 +1,6 @@
+{
+  "vision": {
+    "driver": "auto",
+    "confidence_threshold": 0.42
+  }
+}

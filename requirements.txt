@@ -1,0 +1,36 @@
+# ==============================================================================
+# Brailce – Python Dependencies
+# ==============================================================================
+#
+# Install with:
+#     pip install -r requirements.txt
+#
+# SYSTEM-LEVEL DEPENDENCIES (not installed via pip):
+#   - eSpeak NG  : Offline text-to-speech engine
+#                  https://github.com/espeak-ng/espeak-ng
+#                  Windows: Download installer from releases page
+#                  Linux:   sudo apt install espeak-ng
+#
+#   - Ollama     : Local LLM inference server
+#                  https://ollama.ai
+#                  Install and run: ollama serve
+#                  Pull a model:    ollama pull <model_name>
+#
+# HARDWARE-ONLY DEPENDENCIES (NOT required for laptop simulation):
+#   - gpiozero   : Raspberry Pi GPIO control (pip install gpiozero)
+#   - spidev     : SPI interface for TFT display (pip install spidev)
+#   - Pillow     : Image rendering for TFT (pip install Pillow)
+#
+# ==============================================================================
+
+# --- Core Dependencies (laptop simulation) ---
+keyboard>=0.13.5          # Cross-platform keyboard event capture
+pyttsx3>=2.90             # Cross-platform TTS fallback for development/simulation
+numpy>=1.22.0             # Array operations, audio processing, and vision frame buffers
+opencv-python>=4.6.0      # Camera capture, image preprocessing, and OBR dot detection
+sherpa-onnx>=1.10.0       # Offline Filipino TTS inference
+Pillow>=9.0.0             # LCD display canvas drawing and image composition
+requests>=2.28.0          # HTTP client for local Ollama AI API
+
+# --- Testing ---
+pytest>=7.0
