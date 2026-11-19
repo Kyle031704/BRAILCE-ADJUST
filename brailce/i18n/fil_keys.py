@@ -29,7 +29,7 @@ from typing import Dict, Optional
 # ==============================================================================
 FILIPINO_KEY_LETTERS_ENGLISH: Dict[str, str] = {
     "A": "ey",
-    "B": "bi",
+    "B": "bee",
     "C": "si",
     "D": "di",
     "E": "i",

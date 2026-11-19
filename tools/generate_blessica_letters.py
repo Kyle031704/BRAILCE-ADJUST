@@ -21,7 +21,7 @@ VOICE = "fil-PH-BlessicaNeural"
 # Clean phonetic letter-name spellings per Task 2
 PHONETIC_LETTERS = {
     "A": "ey.",
-    "B": "bi.",
+    "B": "bee.",
     "C": "si.",
     "D": "di.",
     "E": "i.",
@@ -30,7 +30,7 @@ PHONETIC_LETTERS = {
     "H": "eyts.",
     "I": "ay.",
     "J": "dyey.",
-    "K": "key.",
+    "K": "kay.",
     "L": "el.",
     "M": "em.",
     "N": "en.",
