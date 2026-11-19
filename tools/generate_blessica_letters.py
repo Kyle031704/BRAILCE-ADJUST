@@ -16,6 +16,9 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FIL_DIR = PROJECT_ROOT / "brailce" / "audio" / "filipino"
 
+TARGET_SR = 22050
+TARGET_SAMPLES = int(TARGET_SR * 0.800)  # 17,640 samples = 0.800s
+
 VOICE = "fil-PH-BlessicaNeural"
 
 # Clean phonetic letter-name spellings per Task 2
@@ -49,36 +52,49 @@ PHONETIC_LETTERS = {
 }
 
 
-def process_audio_samples(samples: np.ndarray, sr: int = 22050, pre_ms: int = 25, post_ms: int = 35) -> bytes:
-    """Conservative trimming: at least 20ms head/tail padding, 5ms fade in/out, RMS normalized."""
+def process_audio_samples(samples: np.ndarray, sr: int = TARGET_SR, target_samples: int = TARGET_SAMPLES) -> bytes:
+    """Standardized to exactly 0.800s (17,640 samples) with 5ms edge fade and RMS normalization."""
     x = samples.astype(np.float64)
 
     # Trim only quiet digital silence at edges
     nz = np.where(np.abs(x) > 120)[0]
     if nz.size > 0:
         pad = int(sr * 0.025)  # 25ms conservative margin
-        x = x[max(0, nz[0] - pad) : min(len(x), nz[-1] + pad)]
+        core = x[max(0, nz[0] - pad) : min(len(x), nz[-1] + pad)]
+    else:
+        core = x
 
     # RMS normalization to ~3400 (clear, crisp, unclipped)
-    rms = np.sqrt(np.mean(x ** 2)) if len(x) > 0 else 0.0
+    rms = np.sqrt(np.mean(core ** 2)) if len(core) > 0 else 0.0
     if rms > 1e-3:
         target_rms = 3400.0
-        x = x * (target_rms / rms)
+        core = core * (target_rms / rms)
 
-    x = np.clip(x, -32000, 32000)
+    core = np.clip(core, -32000, 32000)
 
     # 5ms edge fade to prevent clicks/pops
-    fade_len = min(int(sr * 0.005), len(x) // 6)
+    fade_len = min(int(sr * 0.005), len(core) // 6)
     if fade_len > 1:
         fade_in = 0.5 * (1.0 - np.cos(np.linspace(0, np.pi, fade_len)))
         fade_out = 0.5 * (1.0 + np.cos(np.linspace(0, np.pi, fade_len)))
-        x[:fade_len] *= fade_in
-        x[-fade_len:] *= fade_out
+        core[:fade_len] *= fade_in
+        core[-fade_len:] *= fade_out
 
-    pcm = np.round(x).astype(np.int16).tobytes()
-    pre_silence = b"\x00\x00" * int(sr * (pre_ms / 1000.0))
-    post_silence = b"\x00\x00" * int(sr * (post_ms / 1000.0))
-    return pre_silence + pcm + post_silence
+    # Resample or time-compress if slightly longer than target
+    if len(core) > target_samples:
+        core = np.interp(
+            np.linspace(0, len(core), target_samples, endpoint=False),
+            np.arange(len(core)),
+            core,
+        )
+
+    rem = target_samples - len(core)
+    head_pad = min(int(sr * 0.040), rem // 3)
+    tail_pad = rem - head_pad
+    padded = np.pad(core, (head_pad, tail_pad), mode="constant")
+    assert len(padded) == target_samples
+
+    return np.round(padded).astype(np.int16).tobytes()
 
 
 async def synthesize_letter(letter: str, spoken: str, sem: asyncio.Semaphore) -> bool:

@@ -543,7 +543,7 @@ class FilipinoEngine:
         word_gap_ms: int = 10,
         comma_pause_ms: int = 150,
         sentence_pause_ms: int = 300,
-        char_gap_ms: int = 200,
+        char_gap_ms: int = 800,
     ) -> None:
         self.fallback_speech = fallback_speech
         self.letter_style = "english_names"

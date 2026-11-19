@@ -34,7 +34,7 @@ class ScannerMode(BaseMode):
     ANNOUNCEMENT_COOLDOWN_S: float = 6.0
 
     # Readout pacing (seconds; overridable in tests)
-    CHAR_PACE_S: float = 0.42
+    CHAR_PACE_S: float = 0.80
     WORD_PAUSE_S: float = 0.35
     LINE_PAUSE_S: float = 0.60
 
@@ -83,12 +83,14 @@ class ScannerMode(BaseMode):
         return False
 
     def _get_char_pace_s(self) -> float:
-        if self._lang() == "fil":
-            cfg = getattr(self.app, "config", None)
-            if cfg and hasattr(cfg, "get"):
+        cfg = getattr(self.app, "config", None)
+        if cfg and hasattr(cfg, "get"):
+            if self._lang() == "fil":
                 gap_ms = cfg.get("speech", "filipino_char_gap_ms", default=None)
-                if gap_ms is not None:
-                    return float(gap_ms) / 1000.0
+            else:
+                gap_ms = cfg.get("speech", "char_gap_ms", default=None)
+            if gap_ms is not None:
+                return float(gap_ms) / 1000.0
         return self.CHAR_PACE_S
 
     def _get_word_pause_s(self) -> float:

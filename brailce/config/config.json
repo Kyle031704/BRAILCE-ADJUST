@@ -40,7 +40,8 @@
         "filipino_word_gap_ms": 30,
         "filipino_comma_pause_ms": 220,
         "filipino_sentence_pause_ms": 380,
-        "filipino_char_gap_ms": 200,
+        "char_gap_ms": 800,
+        "filipino_char_gap_ms": 800,
         "filipino_pitch_semitones": 3.5,
         "max_queue_size": 50
     },

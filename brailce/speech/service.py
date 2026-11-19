@@ -68,7 +68,7 @@ class SpeechService(SpeechEngine):
         filipino_word_gap_ms: int = 30,
         filipino_comma_pause_ms: int = 220,
         filipino_sentence_pause_ms: int = 380,
-        filipino_char_gap_ms: int = 200,
+        filipino_char_gap_ms: int = 800,
     ) -> None:
         engine = piper_engine or text_engine or character_engine or PiperEngine(rate=rate, volume=volume)
         self._engine = engine
@@ -526,7 +526,7 @@ class SpeechService(SpeechEngine):
         fil_word_gap = int(speech_cfg.get("filipino_word_gap_ms", 30))
         fil_comma_pause = int(speech_cfg.get("filipino_comma_pause_ms", 220))
         fil_sentence_pause = int(speech_cfg.get("filipino_sentence_pause_ms", 380))
-        fil_char_gap = int(speech_cfg.get("filipino_char_gap_ms", 200))
+        fil_char_gap = int(speech_cfg.get("filipino_char_gap_ms", 800))
 
         piper = PiperEngine(
             rate=rate,

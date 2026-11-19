@@ -89,7 +89,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # Sentence pause at period / exclamation / question mark (ms)
         "filipino_sentence_pause_ms": 380,
         # Inter-character pause during spell-out in Scanner and Free Input (ms)
-        "filipino_char_gap_ms": 200,
+        "char_gap_ms": 800,
+        "filipino_char_gap_ms": 800,
         # Maximum speech queue size before dropping events
         "max_queue_size": 50,
     },
