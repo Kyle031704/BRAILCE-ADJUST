@@ -903,17 +903,25 @@ class OBREngine:
         """
         return self.braille_presence_confidence(image) >= confidence_threshold
 
-    def process_image(self, image: np.ndarray, debug_dump: bool = False) -> Dict[str, Any]:
+    def process_image(
+        self,
+        image: np.ndarray,
+        debug_dump: bool = False,
+        full_frame: Optional[bool] = None,
+    ) -> Dict[str, Any]:
         """
         Task 1: Centered Grade 1 Braille Scanner with Embossed Dot Merging and Strict Lattice Fitting.
-        1. Orientation Check: Center ROI crop, check optional flip/rotate flags, ensure L-to-R reading order.
+        1. Orientation Check: Adaptive ROI or full frame crop, check optional flip/rotate flags, ensure L-to-R reading order.
         2. Embossed Dot Detection: Illumination-normalized contrast (CLAHE + Top-Hat + Black-Hat)
-           merges highlight and shadow crescents into ONE dome centroid without dropping low-contrast dots.
+           with dark printed ink suppression so text labels/stickers do not blind dot detection.
         3. Strict Braille Grid & Cell-Pitch Fitting:
            - Median intra-cell dot pitch (dx, dy) from nearest-neighbor distances.
            - Enforce inter-cell horizontal spacing (~2.2x to 2.6x dx) so 5 cells never collapse into 3.
            - Map each detected dot to nearest valid (row in 0..2, col in 0..1) slot with distance tolerance.
-        4. Debug Verification: Diagnostic logging and annotated image saving.
+        4. Multi-Line & Multi-Column Support:
+           - Preserves line_index and word_index across lines and columns.
+           - Supports Grade 2 English wordsigns and Filipino Braille contractions.
+        5. Debug Verification: Diagnostic logging and annotated image saving.
         """
         _debug = debug_dump or bool(os.environ.get("BRAILCE_DEBUG", ""))
 
@@ -921,11 +929,20 @@ class OBREngine:
             return {"readable": False, "reason": "no_braille", "text": "", "cells": []}
 
         h, w = image.shape[:2]
-        roi_w = int(w * ROI_W_FRAC)
-        roi_h = int(h * ROI_H_FRAC)
-        x0 = (w - roi_w) // 2
-        y0 = (h - roi_h) // 2
-        crop = image[y0 : y0 + roi_h, x0 : x0 + roi_w].copy()
+        use_full = full_frame if full_frame is not None else (
+            os.environ.get("BRAILCE_FULL_FRAME", "") == "1"
+            or (h >= 480 and w >= 600 and not os.environ.get("BRAILCE_FORCE_ROI", ""))
+        )
+        if use_full:
+            roi_w, roi_h = w, h
+            x0, y0 = 0, 0
+            crop = image.copy()
+        else:
+            roi_w = int(w * ROI_W_FRAC)
+            roi_h = int(h * ROI_H_FRAC)
+            x0 = (w - roi_w) // 2
+            y0 = (h - roi_h) // 2
+            crop = image[y0 : y0 + roi_h, x0 : x0 + roi_w].copy()
 
         # 1. Orientation check (optional environment overrides for inverted camera mount)
         if os.environ.get("BRAILCE_SCANNER_ROT180", "0") == "1":
@@ -945,6 +962,16 @@ class OBREngine:
                 gray = crop.astype(np.uint8)
             enhanced = gray
 
+        # Robustness against printed text stickers/labels:
+        # Paper background is typically mid-to-bright gray (>130).
+        # Dark printed ink has high contrast (<115), which falsely drives up p99 and suppresses Braille dots.
+        # Mask out high-contrast dark ink with median background before computing top/black hat!
+        paper_median = float(np.median(enhanced))
+        clean_enhanced = enhanced.copy()
+        dark_ink_thresh = min(115.0, paper_median - 25.0)
+        dark_mask = clean_enhanced < dark_ink_thresh
+        clean_enhanced[dark_mask] = int(paper_median)
+
         # 2. Embossed Dot Detection: merge highlight (top-hat) and shadow (black-hat)
         detected_dots: List[Tuple[float, float, float, float]] = []
 
@@ -952,8 +979,8 @@ class OBREngine:
             # Elliptical structuring element matching expected dot size
             k_size = max(5, int(round(min(roi_w, roi_h) * 0.035)) | 1)
             kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
-            tophat = cv2.morphologyEx(enhanced, cv2.MORPH_TOPHAT, kernel)
-            blackhat = cv2.morphologyEx(enhanced, cv2.MORPH_BLACKHAT, kernel)
+            tophat = cv2.morphologyEx(clean_enhanced, cv2.MORPH_TOPHAT, kernel)
+            blackhat = cv2.morphologyEx(clean_enhanced, cv2.MORPH_BLACKHAT, kernel)
 
             # Combined response: bright highlights and dark shadows both have positive energy
             combined_resp = tophat.astype(np.float32) + blackhat.astype(np.float32)
@@ -962,36 +989,45 @@ class OBREngine:
 
             p90 = float(np.percentile(blurred_resp, 90.0))
             p99 = float(np.percentile(blurred_resp, 99.0))
-            thresh_val = max(10.0, p90 + 0.22 * (p99 - p90))
+            thresh_val = max(6.0, p90 + 0.22 * (p99 - p90))
             _, bin_mask = cv2.threshold(blurred_resp.astype(np.uint8), int(thresh_val), 255, cv2.THRESH_BINARY)
 
             cnts, _ = cv2.findContours(bin_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             for c in cnts:
                 area = cv2.contourArea(c)
                 peri = cv2.arcLength(c, True)
-                if 3.0 <= area <= 900.0 and peri > 0:
+                if 3.0 <= area <= 600.0 and peri > 0:
                     circ = 4.0 * math.pi * area / (peri * peri)
-                    if circ >= 0.28:
+                    rect = cv2.minAreaRect(c)
+                    rw, rh = rect[1]
+                    aspect = max(rw, rh) / max(1.0, min(rw, rh))
+                    if circ >= 0.22 and aspect <= 2.5:
                         (cx, cy), rad = cv2.minEnclosingCircle(c)
                         detected_dots.append((float(cx), float(cy), float(area), float(rad)))
         else:
             try:
                 from scipy.ndimage import white_tophat, black_tophat, gaussian_filter, label, center_of_mass
                 structure = np.ones((7, 7))
-                wt = white_tophat(enhanced, structure=structure)
-                bt = black_tophat(enhanced, structure=structure)
+                wt = white_tophat(clean_enhanced, structure=structure)
+                bt = black_tophat(clean_enhanced, structure=structure)
                 combined_resp = wt.astype(np.float32) + bt.astype(np.float32)
                 blurred_resp = gaussian_filter(combined_resp, sigma=1.2)
                 p90 = float(np.percentile(blurred_resp, 90.0))
                 p99 = float(np.percentile(blurred_resp, 99.0))
-                thresh_val = max(10.0, p90 + 0.22 * (p99 - p90))
+                thresh_val = max(6.0, p90 + 0.22 * (p99 - p90))
                 mask = blurred_resp >= thresh_val
                 lbl, num_f = label(mask)
                 if num_f > 0:
                     cents = center_of_mass(mask, lbl, range(1, num_f + 1))
                     for idx in range(1, num_f + 1):
-                        a = float(np.sum(lbl == idx))
-                        if 3.0 <= a <= 900.0:
+                        ys, xs = np.where(lbl == idx)
+                        if len(ys) == 0:
+                            continue
+                        h_b = float(ys.max() - ys.min() + 1)
+                        w_b = float(xs.max() - xs.min() + 1)
+                        aspect = max(h_b, w_b) / max(1.0, min(h_b, w_b))
+                        a = float(len(ys))
+                        if 3.0 <= a <= 600.0 and aspect <= 2.5:
                             cy, cx = cents[idx - 1]
                             detected_dots.append((float(cx), float(cy), a, math.sqrt(a / math.pi)))
             except Exception:
@@ -1123,8 +1159,9 @@ class OBREngine:
         words: List[str] = []
         cells_out: List[Dict[str, Any]] = []
         debug_cells: List[Dict[str, Any]] = []
+        word_counter: int = 0
 
-        for line_pts in lines:
+        for line_idx, line_pts in enumerate(lines):
             if len(line_pts) < 1:
                 continue
 
@@ -1201,6 +1238,7 @@ class OBREngine:
                     if line_word:
                         words.append("".join(line_word))
                         line_word = []
+                        word_counter += 1
                     is_number = False
                     is_capital = False
                 prev_k = k
@@ -1235,6 +1273,7 @@ class OBREngine:
 
                 line_word.append(out_c)
                 cell_cx = fit_x0 + k * p_cell
+                cell_box = (float(x0 + cell_cx - 2), float(y0 + y_anchors[0] - 2), float(d + 4), float(2 * d + 4))
                 cells_out.append({
                     "char": out_c,
                     "x": float(x0 + cell_cx),
@@ -1243,11 +1282,16 @@ class OBREngine:
                     "h": float(2 * d),
                     "dots_str": bstr,
                     "kind": "char",
+                    "line_index": line_idx,
+                    "word_index": word_counter,
+                    "bbox": cell_box,
+                    "box": cell_box,
                 })
                 debug_cells.append({"cell_k": k, "bitmask": bstr, "char": out_c})
 
             if line_word:
                 words.append("".join(line_word))
+                word_counter += 1
 
         if _debug:
             print(f"[BRAILCE_DEBUG] dot_count={len(pts_filtered)} pitch={d:.2f}px "

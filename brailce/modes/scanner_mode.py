@@ -386,6 +386,8 @@ class ScannerMode(BaseMode):
         if not speech or not word_chars or has_unknown:
             return
         word = "".join(word_chars)
+        if len(word) <= 1:
+            return
         if word.isdigit():
             speech.speak_text(word, interrupt=False)
         elif word.isalpha():
@@ -477,7 +479,11 @@ class ScannerMode(BaseMode):
                             pass
 
                 if kind == "unknown" or ch == "?" or not ch.strip():
-                    # Task 4.7: Unknown patterns are skipped, never spoken as garbage
+                    cur_has_unknown = True
+                    if speech:
+                        speech.speak_text(get_string("SCANNER_UNKNOWN_CELL", lang), interrupt=False)
+                    if self._stop_readout_event.wait(self._get_char_pace_s()):
+                        return
                     continue
 
                 cur_word.append(ch)
