@@ -1115,17 +1115,21 @@ class OBREngine:
         if len(pts_filtered) < 2:
             pts_filtered = pts
 
-        # 4. Deskew: estimate tilt angle from near-horizontal dot pairs
+        # 4. Deskew: estimate tilt angle from near-horizontal dot pairs on the same row
         angles = []
         for i, (x1, y1) in enumerate(pts_filtered):
             for j, (x2, y2) in enumerate(pts_filtered):
                 if j > i:
-                    dist = math.hypot(x2 - x1, y2 - y1)
-                    if 0.7 * d <= dist <= 3.0 * d:
-                        dx_v = x2 - x1
-                        dy_v = y2 - y1
+                    px1, py1 = (x1, y1) if x1 <= x2 else (x2, y2)
+                    px2, py2 = (x2, y2) if x1 <= x2 else (x1, y1)
+                    dx_v = px2 - px1
+                    dy_v = py2 - py1
+                    dist = math.hypot(dx_v, dy_v)
+                    # Only consider horizontal dot pairs on the same row (abs(dy) <= 0.40 * d)
+                    # to strictly avoid diagonal dot pairs between row 0 and row 1
+                    if 0.7 * d <= dist <= 3.2 * d and abs(dy_v) <= 0.40 * d and dx_v > 0.5 * d:
                         ang = math.atan2(dy_v, dx_v)
-                        if abs(ang) < math.pi / 6:
+                        if abs(ang) < math.pi / 8:  # within +/- 22.5 deg tilt
                             angles.append(ang)
         rot_angle = float(np.median(angles)) if angles else 0.0
 

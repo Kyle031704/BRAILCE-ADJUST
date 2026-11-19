@@ -11,14 +11,17 @@ that cancels cleanly on any key.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from collections import deque
+from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
 from brailce.core.events import AppMode, EventType, InputEvent
 from brailce.i18n.strings import get_mode_name, get_string
 from brailce.modes.base_mode import BaseMode
+from brailce.speech.audio_device import AudioDeviceCoordinator
 from brailce.vision.camera import CameraNotConnectedError, compute_sharpness
 
 logger = logging.getLogger(__name__)
@@ -43,6 +46,20 @@ class ScannerMode(BaseMode):
         "too_small": "SCANNER_MOVE_CLOSER",
         "too_large": "SCANNER_MOVE_FARTHER",
         "no_braille": "SCANNER_NO_BRAILLE",
+    }
+
+    _PUNCT_FILE_MAP = {
+        ",": "char_comma.wav",
+        ".": "char_period.wav",
+        "?": "char_question.wav",
+        "!": "char_exclamation.wav",
+        "'": "char_apostrophe.wav",
+        "-": "char_minus.wav",
+        "+": "char_plus.wav",
+        "=": "char_equals.wav",
+        "/": "char_divide.wav",
+        "*": "char_times.wav",
+        "#": "char_hash.wav",
     }
 
     def __init__(self, app: Any) -> None:
@@ -285,33 +302,73 @@ class ScannerMode(BaseMode):
 
             time.sleep(0.06)
 
+    def _get_char_wav_path(self, ch: str, lang: str) -> Optional[str]:
+        """Resolve path to pre-rendered char_<char>.wav in English or Filipino folder."""
+        root = Path(__file__).resolve().parent.parent / "audio"
+        folder = "filipino" if lang == "fil" else "characters"
+        char_dir = root / folder
+
+        ch_clean = ch.strip()
+        if not ch_clean:
+            return None
+
+        if len(ch_clean) == 1 and ch_clean.isalpha():
+            fname = f"char_{ch_clean.upper()}.wav"
+        elif ch_clean.isdigit():
+            fname = f"char_{ch_clean}.wav"
+        elif ch_clean in self._PUNCT_FILE_MAP:
+            fname = self._PUNCT_FILE_MAP[ch_clean]
+        else:
+            fname = f"char_{ch_clean}.wav"
+
+        path = str(char_dir / fname)
+        if os.path.isfile(path) and os.path.getsize(path) > 44:
+            return path
+        return None
+
+    def _speak_letter(self, ch: str) -> None:
+        """
+        Step 1 (Spell): Pronounce each letter individually with a short pause between letters,
+        using brailce/audio/characters/char_<char>.wav when in English mode and
+        brailce/audio/filipino/char_<char>.wav when in Filipino mode.
+        """
+        speech = getattr(self.app, "speech", None)
+        if not ch:
+            return
+
+        lang = self._lang()
+        wav_path = self._get_char_wav_path(ch, lang)
+        played = False
+        if wav_path:
+            try:
+                played = AudioDeviceCoordinator.play_wav_file(wav_path, owner="scanner", timeout=3.0)
+            except Exception as exc:
+                logger.debug("Scanner char playback fallback: %s", exc)
+
+        if not played and speech:
+            speech.speak_character(ch)
+
     def _capture_best_still(self) -> Optional[Any]:
-        """Acquire full-res still (sharpest of N) or sharpest buffered preview frame."""
+        """Acquire sharpest buffered preview frame or live camera still."""
         cam = getattr(self.app, "camera", None)
         if cam is None or (hasattr(cam, "is_available") and not cam.is_available()):
             self._report_camera_missing()
             return None
 
+        with self._frame_lock:
+            if self._sharp_frames:
+                return max(self._sharp_frames, key=lambda item: item[0])[1].copy()
+            if self._latest_frame is not None and getattr(self._latest_frame, "size", 0) > 0:
+                return self._latest_frame.copy()
+
         try:
-            if hasattr(cam, "capture_sharpest"):
-                frame = cam.capture_sharpest(n=5)
-                if frame is not None:
-                    return frame
-            if hasattr(cam, "capture_still"):
-                frame = cam.capture_still()
-                if frame is not None:
-                    return frame
             return cam.capture_image()
         except CameraNotConnectedError:
             self._report_camera_missing()
             return None
         except Exception as exc:
-            logger.warning("Still capture failed, falling back to sharpest preview: %s", exc)
-
-        with self._frame_lock:
-            if self._sharp_frames:
-                return max(self._sharp_frames, key=lambda item: item[0])[1]
-            return self._latest_frame
+            logger.warning("Still capture failed: %s", exc)
+            return None
 
     def _start_scan(self) -> None:
         """Start full capture + classical OBR decode in background thread."""
@@ -348,6 +405,12 @@ class ScannerMode(BaseMode):
 
             result = self.app.obr.process_image(image)
             if not result.get("readable") or not str(result.get("text", "")).strip():
+                # Center-crop fallback if full-frame produced no readable text
+                result_center = self.app.obr.process_image(image, full_frame=False)
+                if result_center.get("readable") and str(result_center.get("text", "")).strip():
+                    result = result_center
+
+            if not result.get("readable") or not str(result.get("text", "")).strip():
                 reason = str(result.get("reason", "no_braille"))
                 key = self._REASON_TO_STRING_KEY.get(reason, "SCANNER_NO_BRAILLE")
                 msg = get_string(key, lang)
@@ -381,20 +444,36 @@ class ScannerMode(BaseMode):
         self._readout_thread.start()
 
     def _speak_completed_word(self, word_chars: List[str], has_unknown: bool) -> None:
-        """Speak an assembled word/number once all of its cells have been spelled out."""
+        """
+        Step 2 (Pronounce Word):
+        Pause briefly, then pronounce the full word using the active language's audio pipeline:
+        - In Filipino mode: prioritize matching brailce/audio/filipino/word_*.wav files
+          before falling back to Filipino TTS.
+        - In English mode: use existing English audio/TTS.
+        """
         speech = getattr(self.app, "speech", None)
         if not speech or not word_chars or has_unknown:
             return
         word = "".join(word_chars)
         if len(word) <= 1:
             return
-        if word.isdigit():
-            speech.speak_text(word, interrupt=False)
-        elif word.isalpha():
-            if hasattr(speech, "speak_word_clean"):
-                speech.speak_word_clean(word, interrupt=False)
-            else:
-                speech.speak_word(word)
+
+        lang = self._lang()
+        if lang == "fil":
+            try:
+                from brailce.speech.filipino_engine import get_filipino_word_path
+                fil_word_wav = get_filipino_word_path(word)
+                if fil_word_wav and os.path.isfile(fil_word_wav) and os.path.getsize(fil_word_wav) > 44:
+                    played = AudioDeviceCoordinator.play_wav_file(fil_word_wav, owner="scanner", timeout=5.0)
+                    if played:
+                        return
+            except Exception as exc:
+                logger.debug("Failed playing filipino word wav for '%s': %s", word, exc)
+
+        if hasattr(speech, "speak_word_clean"):
+            speech.speak_word_clean(word, interrupt=False)
+        elif hasattr(speech, "speak_word"):
+            speech.speak_word(word)
         else:
             speech.speak_text(word, interrupt=False)
 
@@ -487,8 +566,7 @@ class ScannerMode(BaseMode):
                     continue
 
                 cur_word.append(ch)
-                if speech:
-                    speech.speak_character(ch)
+                self._speak_letter(ch)
 
                 if self._stop_readout_event.wait(self._get_char_pace_s()):
                     return

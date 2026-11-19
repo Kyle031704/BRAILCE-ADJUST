@@ -570,45 +570,13 @@ class UsbWebcamDevice(CameraDevice):
         return self.capture_image()
 
     def capture_still(self) -> Optional[np.ndarray]:
-        """Capture high quality still frame at still_resolution (1920x1080) with autofocus handling and sharpest-of-N."""
+        """Capture clean still frame directly without disruptive on-the-fly resolution switching."""
         if not self._is_active:
             raise CameraNotConnectedError(self.init_error or "Camera not connected")
 
-        sw, sh = self.still_resolution
-        orig_w, orig_h = self.resolution
-        frames: List[np.ndarray] = []
-        if self._cap and self._cap.isOpened():
-            try:
-                self._cap.set(getattr(cv2, "CAP_PROP_FRAME_WIDTH", 3), sw)
-                self._cap.set(getattr(cv2, "CAP_PROP_FRAME_HEIGHT", 4), sh)
-                time.sleep(0.08)
-                for _ in range(3):
-                    self._cap.grab()
-                for _ in range(5):
-                    ret, f = self._cap.read()
-                    if ret and f is not None and f.size > 0:
-                        frames.append(f)
-                    time.sleep(0.02)
-            except Exception as exc:
-                logger.debug("UsbWebcamDevice still capture switch warning: %s", exc)
-            finally:
-                try:
-                    self._cap.set(getattr(cv2, "CAP_PROP_FRAME_WIDTH", 3), orig_w)
-                    self._cap.set(getattr(cv2, "CAP_PROP_FRAME_HEIGHT", 4), orig_h)
-                except Exception:
-                    pass
-
-        if frames:
-            def frame_sharpness(f: np.ndarray) -> float:
-                if cv2 is not None:
-                    try:
-                        g = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY) if len(f.shape) == 3 else f
-                        return float(cv2.Laplacian(g, cv2.CV_64F).var())
-                    except Exception:
-                        pass
-                return compute_sharpness(f)
-
-            return max(frames, key=frame_sharpness)
+        with self._lock:
+            if self._latest_frame is not None and getattr(self._latest_frame, "size", 0) > 0:
+                return self._latest_frame.copy()
 
         return self.capture_image()
 

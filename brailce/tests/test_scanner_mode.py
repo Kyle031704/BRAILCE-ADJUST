@@ -106,8 +106,12 @@ class TestScannerMode:
         mock_app.speech.speak_text.assert_called_with(expected, interrupt=True)
 
     def test_readout_speaks_letter_by_letter_then_whole_word(
-        self, scanner_mode: ScannerMode, mock_app: BrailceApp
+        self, scanner_mode: ScannerMode, mock_app: BrailceApp, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.setattr(
+            "brailce.speech.audio_device.AudioDeviceCoordinator.play_wav_file",
+            lambda *args, **kwargs: False,
+        )
         result = {
             "readable": True,
             "text": "NEED",
@@ -148,3 +152,37 @@ class TestScannerMode:
         assert scanner_mode._is_reading is False
         mock_app.speech.stop.assert_called()
         mock_app.speech.speak_text.assert_any_call(get_string("SCANNER_UNKNOWN_CELL", "en"), interrupt=False)
+
+    def test_char_wav_path_resolution(self, scanner_mode: ScannerMode) -> None:
+        path_en_a = scanner_mode._get_char_wav_path("A", "en")
+        assert path_en_a is not None
+        assert path_en_a.replace("\\", "/").endswith("audio/characters/char_A.wav")
+
+        path_fil_b = scanner_mode._get_char_wav_path("B", "fil")
+        assert path_fil_b is not None
+        assert path_fil_b.replace("\\", "/").endswith("audio/filipino/char_B.wav")
+
+        path_punct = scanner_mode._get_char_wav_path(",", "en")
+        assert path_punct is not None
+        assert path_punct.replace("\\", "/").endswith("char_comma.wav")
+
+    def test_spell_then_pronounce_filipino_and_english(
+        self, scanner_mode: ScannerMode, mock_app: BrailceApp, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mock_app.state.language = "fil"
+        played_wavs = []
+        monkeypatch.setattr(
+            "brailce.speech.audio_device.AudioDeviceCoordinator.play_wav_file",
+            lambda path, owner="scanner", timeout=5.0: played_wavs.append(path) or True,
+        )
+
+        # Step 1: Spell letters for BAHAY in Filipino
+        for ch in ["B", "A", "H", "A", "Y"]:
+            scanner_mode._speak_letter(ch)
+
+        # Step 2: Pronounce full word BAHAY
+        scanner_mode._speak_completed_word(["B", "A", "H", "A", "Y"], False)
+
+        assert any("char_B.wav" in p.replace("\\", "/") for p in played_wavs)
+        assert any("char_A.wav" in p.replace("\\", "/") for p in played_wavs)
+        assert any("word_bahay.wav" in p.replace("\\", "/") for p in played_wavs)
