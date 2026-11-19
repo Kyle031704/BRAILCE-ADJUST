@@ -230,9 +230,7 @@ class SpeechService(SpeechEngine):
 
         if self._language == "fil" and self._filipino_letter_voice == "filipino":
             self._record_utterance("character", character, {"character": character, "lang": "fil"})
-            from brailce.i18n.fil_keys import get_filipino_keystroke_name
-            ch_name = get_filipino_keystroke_name(character, style=getattr(self, "filipino_letter_style", "english_names"))
-            self.filipino_engine.enqueue_text(ch_name, interrupt=False)
+            self.filipino_engine.enqueue_character(character, use_filipino_voice=True)
             return
 
         normalized = normalize_for_piper(character, is_character=True)

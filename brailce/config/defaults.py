@@ -83,7 +83,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # Filipino synthesis rate setting for edge-tts build
         "filipino_rate": "-5%",
         # Inter-word gap inside a clause for offline concatenation (ms)
-        "filipino_word_gap_ms": 30,
+        "filipino_word_gap_ms": 10,
         # Clause pause at comma / colon / semicolon (ms)
         "filipino_comma_pause_ms": 220,
         # Sentence pause at period / exclamation / question mark (ms)

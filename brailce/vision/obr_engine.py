@@ -903,17 +903,20 @@ class OBREngine:
         """
         return self.braille_presence_confidence(image) >= confidence_threshold
 
-    def process_image(self, image: np.ndarray) -> Dict[str, Any]:
+    def process_image(self, image: np.ndarray, debug_dump: bool = False) -> Dict[str, Any]:
         """
-        Task 4: Centered Grade 1 English Braille Scanner.
-        1. Crop to CENTER REGION ONLY (ROI_W_FRAC=0.5, ROI_H_FRAC=0.4).
-        2. Detect dots as small round blobs (testing both dark and light polarity).
-        3. Estimate dot pitch d, deskew rows.
-        4. Build grid, infer present dots for each 2x3 cell.
-        5. Map to Grade 1 Braille letters a-z (ignoring indicators, skipping unknown).
-        6. Group cells into words.
-        7. Save annotated debug image to debug_scan/last_scan.jpg.
+        Task 1: Centered Grade 1 Braille Scanner with Embossed Dot Merging and Strict Lattice Fitting.
+        1. Orientation Check: Center ROI crop, check optional flip/rotate flags, ensure L-to-R reading order.
+        2. Embossed Dot Detection: Illumination-normalized contrast (CLAHE + Top-Hat + Black-Hat)
+           merges highlight and shadow crescents into ONE dome centroid without dropping low-contrast dots.
+        3. Strict Braille Grid & Cell-Pitch Fitting:
+           - Median intra-cell dot pitch (dx, dy) from nearest-neighbor distances.
+           - Enforce inter-cell horizontal spacing (~2.2x to 2.6x dx) so 5 cells never collapse into 3.
+           - Map each detected dot to nearest valid (row in 0..2, col in 0..1) slot with distance tolerance.
+        4. Debug Verification: Diagnostic logging and annotated image saving.
         """
+        _debug = debug_dump or bool(os.environ.get("BRAILCE_DEBUG", ""))
+
         if image is None or getattr(image, "size", 0) == 0:
             return {"readable": False, "reason": "no_braille", "text": "", "cells": []}
 
@@ -922,107 +925,170 @@ class OBREngine:
         roi_h = int(h * ROI_H_FRAC)
         x0 = (w - roi_w) // 2
         y0 = (h - roi_h) // 2
-        crop = image[y0 : y0 + roi_h, x0 : x0 + roi_w]
+        crop = image[y0 : y0 + roi_h, x0 : x0 + roi_w].copy()
 
-        # 1. Grayscale & Enhancement
+        # 1. Orientation check (optional environment overrides for inverted camera mount)
+        if os.environ.get("BRAILCE_SCANNER_ROT180", "0") == "1":
+            crop = np.rot90(crop, 2)
+        if os.environ.get("BRAILCE_SCANNER_HFLIP", "0") == "1":
+            crop = np.fliplr(crop)
+
+        # Convert to grayscale
         if cv2 is not None:
             gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if len(crop.shape) == 3 else crop.copy()
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            clahe = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8))
             enhanced = clahe.apply(gray)
-            blurred = cv2.GaussianBlur(enhanced, (3, 3), 0)
         else:
             if crop.ndim == 3:
                 gray = np.dot(crop[..., :3], [0.2989, 0.5870, 0.1140]).astype(np.uint8)
             else:
                 gray = crop.astype(np.uint8)
-            blurred = gray
+            enhanced = gray
 
-        # 2. Detect dots (small round blobs, testing both dark and light polarity)
-        dark_dots = []
-        light_dots = []
+        # 2. Embossed Dot Detection: merge highlight (top-hat) and shadow (black-hat)
+        detected_dots: List[Tuple[float, float, float, float]] = []
 
         if cv2 is not None:
-            # Adaptive threshold for dark blobs
-            th_d = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 5)
-            cnts_d, _ = cv2.findContours(th_d, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            for c in cnts_d:
-                area = cv2.contourArea(c)
-                peri = cv2.arcLength(c, True)
-                if 4.0 <= area <= 700.0 and peri > 0:
-                    circ = 4.0 * math.pi * area / (peri * peri)
-                    if circ >= 0.38:
-                        (cx, cy), rad = cv2.minEnclosingCircle(c)
-                        dark_dots.append((float(cx), float(cy), float(area), float(rad)))
+            # Elliptical structuring element matching expected dot size
+            k_size = max(5, int(round(min(roi_w, roi_h) * 0.035)) | 1)
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
+            tophat = cv2.morphologyEx(enhanced, cv2.MORPH_TOPHAT, kernel)
+            blackhat = cv2.morphologyEx(enhanced, cv2.MORPH_BLACKHAT, kernel)
 
-            # Adaptive threshold for light blobs
-            th_l = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 21, 5)
-            cnts_l, _ = cv2.findContours(th_l, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            for c in cnts_l:
+            # Combined response: bright highlights and dark shadows both have positive energy
+            combined_resp = tophat.astype(np.float32) + blackhat.astype(np.float32)
+            # Blur to merge the paired highlight and shadow crescents into ONE dome center
+            blurred_resp = cv2.GaussianBlur(combined_resp, (5, 5), 1.2)
+
+            p90 = float(np.percentile(blurred_resp, 90.0))
+            p99 = float(np.percentile(blurred_resp, 99.0))
+            thresh_val = max(10.0, p90 + 0.22 * (p99 - p90))
+            _, bin_mask = cv2.threshold(blurred_resp.astype(np.uint8), int(thresh_val), 255, cv2.THRESH_BINARY)
+
+            cnts, _ = cv2.findContours(bin_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for c in cnts:
                 area = cv2.contourArea(c)
                 peri = cv2.arcLength(c, True)
-                if 4.0 <= area <= 700.0 and peri > 0:
+                if 3.0 <= area <= 900.0 and peri > 0:
                     circ = 4.0 * math.pi * area / (peri * peri)
-                    if circ >= 0.38:
+                    if circ >= 0.28:
                         (cx, cy), rad = cv2.minEnclosingCircle(c)
-                        light_dots.append((float(cx), float(cy), float(area), float(rad)))
+                        detected_dots.append((float(cx), float(cy), float(area), float(rad)))
         else:
             try:
-                from scipy.ndimage import label, center_of_mass
-                mean_val = float(np.mean(gray))
-                std_val = float(np.std(gray))
-                mask_d = gray < max(10, mean_val - max(15, 1.2 * std_val))
-                lbl_d, n_d = label(mask_d)
-                if n_d > 0:
-                    cents_d = center_of_mass(mask_d, lbl_d, range(1, n_d + 1))
-                    for idx in range(1, n_d + 1):
-                        a = float(np.sum(lbl_d == idx))
-                        if 4.0 <= a <= 700.0:
-                            cy, cx = cents_d[idx - 1]
-                            dark_dots.append((float(cx), float(cy), a, math.sqrt(a / math.pi)))
-                mask_l = gray > min(245, mean_val + max(15, 1.2 * std_val))
-                lbl_l, n_l = label(mask_l)
-                if n_l > 0:
-                    cents_l = center_of_mass(mask_l, lbl_l, range(1, n_l + 1))
-                    for idx in range(1, n_l + 1):
-                        a = float(np.sum(lbl_l == idx))
-                        if 4.0 <= a <= 700.0:
-                            cy, cx = cents_l[idx - 1]
-                            light_dots.append((float(cx), float(cy), a, math.sqrt(a / math.pi)))
+                from scipy.ndimage import white_tophat, black_tophat, gaussian_filter, label, center_of_mass
+                structure = np.ones((7, 7))
+                wt = white_tophat(enhanced, structure=structure)
+                bt = black_tophat(enhanced, structure=structure)
+                combined_resp = wt.astype(np.float32) + bt.astype(np.float32)
+                blurred_resp = gaussian_filter(combined_resp, sigma=1.2)
+                p90 = float(np.percentile(blurred_resp, 90.0))
+                p99 = float(np.percentile(blurred_resp, 99.0))
+                thresh_val = max(10.0, p90 + 0.22 * (p99 - p90))
+                mask = blurred_resp >= thresh_val
+                lbl, num_f = label(mask)
+                if num_f > 0:
+                    cents = center_of_mass(mask, lbl, range(1, num_f + 1))
+                    for idx in range(1, num_f + 1):
+                        a = float(np.sum(lbl == idx))
+                        if 3.0 <= a <= 900.0:
+                            cy, cx = cents[idx - 1]
+                            detected_dots.append((float(cx), float(cy), a, math.sqrt(a / math.pi)))
             except Exception:
-                pass
+                detected_dots = []
 
-        # Pick polarity with more dots
-        chosen = dark_dots if len(dark_dots) >= len(light_dots) else light_dots
-        if len(chosen) < 2:
+        # Fallback to adaptive threshold if morphological response yielded < 2 dots
+        if len(detected_dots) < 2:
+            if cv2 is not None:
+                blr = cv2.GaussianBlur(enhanced, (3, 3), 0)
+                th_d = cv2.adaptiveThreshold(blr, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 5)
+                cnts_d, _ = cv2.findContours(th_d, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                for c in cnts_d:
+                    area = cv2.contourArea(c)
+                    peri = cv2.arcLength(c, True)
+                    if 4.0 <= area <= 700.0 and peri > 0:
+                        circ = 4.0 * math.pi * area / (peri * peri)
+                        if circ >= 0.35:
+                            (cx, cy), rad = cv2.minEnclosingCircle(c)
+                            detected_dots.append((float(cx), float(cy), float(area), float(rad)))
+            else:
+                try:
+                    from scipy.ndimage import label, center_of_mass
+                    mean_val = float(np.mean(enhanced))
+                    std_val = float(np.std(enhanced))
+                    mask_d = enhanced < max(10, mean_val - max(15, 1.2 * std_val))
+                    lbl_d, n_d = label(mask_d)
+                    if n_d > 0:
+                        cents_d = center_of_mass(mask_d, lbl_d, range(1, n_d + 1))
+                        for idx in range(1, n_d + 1):
+                            a = float(np.sum(lbl_d == idx))
+                            if 4.0 <= a <= 700.0:
+                                cy, cx = cents_d[idx - 1]
+                                detected_dots.append((float(cx), float(cy), a, math.sqrt(a / math.pi)))
+                except Exception:
+                    pass
+
+        if len(detected_dots) < 2:
             return {"readable": False, "reason": "no_braille", "text": "", "cells": []}
 
-        pts = [(x, y) for x, y, a, r in chosen]
+        raw_pts = [(x, y) for x, y, a, r in detected_dots]
 
-        # 3. Estimate dot pitch d = median nearest-neighbor distance
+        # 3. Estimate initial dot pitch d from nearest neighbors
         nn_dists = []
-        for i, (x1, y1) in enumerate(pts):
-            dists = [math.hypot(x1 - x2, y1 - y2) for j, (x2, y2) in enumerate(pts) if i != j]
+        for i, (x1, y1) in enumerate(raw_pts):
+            dists = [math.hypot(x1 - x2, y1 - y2) for j, (x2, y2) in enumerate(raw_pts) if i != j]
             if dists:
                 nn_dists.append(min(dists))
         d = float(np.median(nn_dists)) if nn_dists else 16.0
         if d < 5.0 or d > min(roi_w, roi_h) * 0.40:
             d = 16.0
 
-        # Outlier size filter
+        # Non-Maximum Suppression (NMS): merge split highlight/shadow pairs closer than 0.55*d
+        pts: List[Tuple[float, float]] = []
+        used = [False] * len(raw_pts)
+        for i, (xi, yi) in enumerate(raw_pts):
+            if used[i]:
+                continue
+            partners = [
+                j for j, (xj, yj) in enumerate(raw_pts)
+                if j != i and not used[j] and math.hypot(xi - xj, yi - yj) < 0.55 * d
+            ]
+            if partners:
+                xs = [xi] + [raw_pts[j][0] for j in partners]
+                ys = [yi] + [raw_pts[j][1] for j in partners]
+                pts.append((float(np.mean(xs)), float(np.mean(ys))))
+                for j in partners:
+                    used[j] = True
+            else:
+                pts.append((xi, yi))
+            used[i] = True
+
+        # Re-estimate d after NMS
+        nn_dists = []
+        for i, (x1, y1) in enumerate(pts):
+            dists = [math.hypot(x1 - x2, y1 - y2) for j, (x2, y2) in enumerate(pts) if i != j]
+            if dists:
+                nn_dists.append(min(dists))
+        if nn_dists:
+            d_cand = float(np.median(nn_dists))
+            if 5.0 <= d_cand <= min(roi_w, roi_h) * 0.40:
+                d = d_cand
+
+        # Filter outlier noise blobs
         pts_filtered = [p for i, p in enumerate(pts) if 0.45 * d <= nn_dists[i] <= 3.8 * d]
         if len(pts_filtered) < 2:
             pts_filtered = pts
 
-        # 4. Deskew: estimate angle from pairs close to horizontal
+        # 4. Deskew: estimate tilt angle from near-horizontal dot pairs
         angles = []
         for i, (x1, y1) in enumerate(pts_filtered):
             for j, (x2, y2) in enumerate(pts_filtered):
                 if j > i:
                     dist = math.hypot(x2 - x1, y2 - y1)
                     if 0.7 * d <= dist <= 3.0 * d:
-                        dx = x2 - x1
-                        dy = y2 - y1
-                        ang = math.atan2(dy, dx)
+                        dx_v = x2 - x1
+                        dy_v = y2 - y1
+                        ang = math.atan2(dy_v, dx_v)
                         if abs(ang) < math.pi / 6:
                             angles.append(ang)
         rot_angle = float(np.median(angles)) if angles else 0.0
@@ -1032,7 +1098,7 @@ class OBREngine:
         sin_a = math.sin(-rot_angle)
         cx_mid = roi_w / 2.0
         cy_mid = roi_h / 2.0
-        rot_pts = []
+        rot_pts: List[Tuple[float, float]] = []
         for px, py in pts_filtered:
             tx = px - cx_mid
             ty = py - cy_mid
@@ -1040,96 +1106,155 @@ class OBREngine:
             ry = tx * sin_a + ty * cos_a + cy_mid
             rot_pts.append((rx, ry))
 
-        # 5. Build grid
-        # Cluster y into rows
-        y_vals = sorted([y for x, y in rot_pts])
-        row_clusters = []
-        for y in y_vals:
-            placed = False
-            for r in row_clusters:
-                if abs(y - np.mean(r)) < 0.35 * d:
-                    r.append(y)
-                    placed = True
-                    break
-            if not placed:
-                row_clusters.append([y])
-        row_y = sorted([float(np.mean(r)) for r in row_clusters])
-        if not row_y:
-            return {"readable": False, "reason": "no_braille", "text": "", "cells": []}
-
-        y_base = row_y[0]
-
-        # Cluster x into columns
-        x_vals = sorted([x for x, y in rot_pts])
-        col_clusters = []
-        for x in x_vals:
-            placed = False
-            for c in col_clusters:
-                if abs(x - np.mean(c)) < 0.35 * d:
-                    c.append(x)
-                    placed = True
-                    break
-            if not placed:
-                col_clusters.append([x])
-        col_x = sorted([float(np.mean(c)) for c in col_clusters])
-
-        # Group columns into 2-column cells
-        cells = []
-        i = 0
-        while i < len(col_x):
-            c1 = col_x[i]
-            if i + 1 < len(col_x) and abs((col_x[i + 1] - c1) - d) < 0.45 * d:
-                c2 = col_x[i + 1]
-                cells.append((c1, c2))
-                i += 2
+        # 5. Strict Braille Grid & Cell-Pitch Fitting:
+        # A. Group dots into lines by ry (Braille line height <= 2.2*d)
+        rot_pts.sort(key=lambda p: p[1])
+        lines: List[List[Tuple[float, float]]] = []
+        for p in rot_pts:
+            if not lines:
+                lines.append([p])
             else:
-                cells.append((c1, c1 + d))
-                i += 1
+                line_mean_y = float(np.mean([pt[1] for pt in lines[-1]]))
+                if abs(p[1] - line_mean_y) <= 2.2 * d:
+                    lines[-1].append(p)
+                else:
+                    lines.append([p])
 
-        words = []
-        cur_word = []
-        cells_out = []
-        prev_c_end = None
-        for (c1, c2) in cells:
-            # Word gap detection (> 2.8d advance)
-            if prev_c_end is not None and (c1 - prev_c_end) > 2.8 * d:
-                if cur_word:
-                    words.append("".join(cur_word))
-                    cur_word = []
-            prev_c_end = c2
+        words: List[str] = []
+        cells_out: List[Dict[str, Any]] = []
+        debug_cells: List[Dict[str, Any]] = []
 
-            # 6-dot grid lookup
-            grid_pos = [
-                (c1, y_base), (c1, y_base + d), (c1, y_base + 2 * d),
-                (c2, y_base), (c2, y_base + d), (c2, y_base + 2 * d),
-            ]
-            bits = []
-            for gx, gy in grid_pos:
-                has_dot = any(math.hypot(rx - gx, ry - gy) < 0.45 * d for rx, ry in rot_pts)
-                bits.append("1" if has_dot else "0")
-            pattern = "".join(bits)
-
-            # Ignore capital indicator (dot 6 alone: '000001') and number indicator ('001111')
-            if pattern in ("000001", "001111", "000000"):
+        for line_pts in lines:
+            if len(line_pts) < 1:
                 continue
 
-            # Grade 1 table lookup
-            ch = self.BINARY_DICT.get(pattern)
-            if ch and ch not in ("^", "#"):
-                ch = ch.upper()
-                cur_word.append(ch)
+            # B. Fit row baseline y0 for this line
+            ys = np.array([pt[1] for pt in line_pts])
+            best_y0 = float(np.min(ys))
+            best_err = float("inf")
+            for y_anchor in ys:
+                for offset in (0, 1, 2):
+                    cand_y0 = float(y_anchor - offset * d)
+                    row_dists = np.min(
+                        np.abs(ys[:, None] - (cand_y0 + np.array([0.0, d, 2.0 * d])[None, :])),
+                        axis=1,
+                    )
+                    err = float(np.sum(row_dists))
+                    if err < best_err:
+                        best_err = err
+                        best_y0 = cand_y0
+            y_anchors = [best_y0, best_y0 + d, best_y0 + 2.0 * d]
+
+            # C. Find paired columns to anchor cell grid and estimate p_cell
+            # Intra-cell column gap is strictly ~1.0*d (tolerance: [0.80*d, 1.20*d]).
+            # Inter-cell column gap is ~1.4*d (which falls outside [0.80*d, 1.20*d]).
+            line_pts.sort(key=lambda p: p[0])
+            xs = [p[0] for p in line_pts]
+            anchors: List[float] = []
+            for i, x1 in enumerate(xs):
+                for j, x2 in enumerate(xs):
+                    if j > i and 0.80 * d <= (x2 - x1) <= 1.22 * d:
+                        anchors.append(x1)
+
+            if anchors:
+                fit_x0 = min(anchors)
+                diffs = [a2 - a1 for a1 in anchors for a2 in anchors if a2 > a1]
+                cands = []
+                for df in diffs:
+                    for k in range(1, 10):
+                        pitch = df / k
+                        if 2.1 * d <= pitch <= 2.7 * d:
+                            cands.append(pitch)
+                p_cell = float(np.median(cands)) if cands else 2.4 * d
+            else:
+                fit_x0 = min(xs)
+                p_cell = 2.4 * d
+
+            # Align fit_x0 with the leftmost dot
+            k_min = int(round((min(xs) - fit_x0) / p_cell))
+            fit_x0 = fit_x0 + k_min * p_cell
+
+            # D. Assign each dot to (cell_k, col in {0, 1}, row in {0, 1, 2})
+            cells_bits: Dict[int, List[int]] = {}
+            for (rx, ry) in line_pts:
+                k = int(round((rx - fit_x0) / p_cell))
+                cell_x = fit_x0 + k * p_cell
+                col = 0 if abs(rx - cell_x) <= abs(rx - (cell_x + d)) else 1
+                row = int(round((ry - y_anchors[0]) / d))
+                row = max(0, min(2, row))
+
+                slot_x = cell_x + col * d
+                slot_y = y_anchors[row]
+                if math.hypot(rx - slot_x, ry - slot_y) <= 0.45 * d:
+                    bits = cells_bits.setdefault(k, [0, 0, 0, 0, 0, 0])
+                    bits[col * 3 + row] = 1
+
+            # E. Decode cell bits into Grade 1 Braille characters
+            line_word: List[str] = []
+            prev_k: Optional[int] = None
+            is_number = False
+            is_capital = False
+
+            for k in sorted(cells_bits.keys()):
+                # Inter-cell word gap: if cell index advances by >= 2, insert word break
+                if prev_k is not None and (k - prev_k) >= 2:
+                    if line_word:
+                        words.append("".join(line_word))
+                        line_word = []
+                    is_number = False
+                    is_capital = False
+                prev_k = k
+
+                bits = cells_bits[k]
+                bstr = "".join(str(b) for b in bits)
+
+                # Skip blank cells
+                if bstr == "000000":
+                    continue
+
+                # Capital indicator (dot 6 alone: '000001')
+                if bstr == "000001":
+                    is_capital = True
+                    continue
+                # Number indicator (dots 3, 4, 5, 6: '001111')
+                if bstr == "001111":
+                    is_number = True
+                    continue
+
+                ch = self.BINARY_DICT.get(bstr)
+                if not ch:
+                    continue
+
+                if is_number:
+                    out_c = self.NUM_MAP.get(ch, ch)
+                    if not out_c.isdigit():
+                        is_number = False
+                else:
+                    out_c = ch.upper() if (is_capital and ch.isalpha()) else ch.upper()
+                    is_capital = False
+
+                line_word.append(out_c)
+                cell_cx = fit_x0 + k * p_cell
                 cells_out.append({
-                    "char": ch,
-                    "x": float(x0 + c1),
-                    "y": float(y0 + y_base),
+                    "char": out_c,
+                    "x": float(x0 + cell_cx),
+                    "y": float(y0 + y_anchors[0]),
                     "w": float(d),
                     "h": float(2 * d),
-                    "dots_str": pattern,
+                    "dots_str": bstr,
                     "kind": "char",
                 })
+                debug_cells.append({"cell_k": k, "bitmask": bstr, "char": out_c})
 
-        if cur_word:
-            words.append("".join(cur_word))
+            if line_word:
+                words.append("".join(line_word))
+
+        if _debug:
+            print(f"[BRAILCE_DEBUG] dot_count={len(pts_filtered)} pitch={d:.2f}px "
+                  f"cell_pitch={2.4*d:.2f}px cells_found={len(cells_out)} "
+                  f"decoded={' '.join(words)!r}")
+            for dc in debug_cells:
+                print(f"[BRAILCE_DEBUG]   cell {dc['cell_k']}: bitmask={dc['bitmask']} -> {dc['char']}")
 
         # 9. Save annotated debug image to debug_scan/last_scan.jpg
         try:

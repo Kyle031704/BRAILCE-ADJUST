@@ -203,17 +203,25 @@ FILIPINO_MODE_FILENAMES = {
 
 
 def get_filipino_character_path(char: str) -> Optional[str]:
-    """Return path to cached Filipino character WAV if it exists on disk."""
+    """
+    Return path to cached Filipino character WAV if it exists on disk.
+    Case-safe for Linux / Raspberry Pi: single letters A-Z strictly resolve to char_{UPPER}.wav.
+    """
     if not char:
         return None
     clean = char.strip()
+    cache_dir = _find_filipino_audio_dir()
+    if len(clean) == 1 and clean.isalpha():
+        upper_p = os.path.join(cache_dir, f"char_{clean.upper()}.wav")
+        if os.path.isfile(upper_p):
+            return upper_p
+
     fname = FILIPINO_CHAR_FILENAMES.get(clean)
     if not fname:
         upper = clean.upper()
         fname = FILIPINO_CHAR_FILENAMES.get(upper)
     if not fname:
         return None
-    cache_dir = _find_filipino_audio_dir()
     wav_path = os.path.join(cache_dir, fname)
     if os.path.isfile(wav_path):
         return wav_path
@@ -618,14 +626,37 @@ class FilipinoEngine:
             self._enqueue("wav", wav_path, interrupt=interrupt)
 
     def enqueue_character(self, character: str, use_filipino_voice: bool = True, style: Optional[str] = None) -> None:
-        """Non-blocking queued character feedback using the same speech call that words use."""
-        if character:
+        """Non-blocking queued character feedback using the same speech call that words use.
+
+        Priority for A-Z letters when use_filipino_voice=True:
+          1. char_{UPPER}.wav played directly via enqueue_wav.
+          Never falls back to English voice, Piper, MMS-TTS, sherpa-onnx, or espeak for letters.
+        """
+        if not character:
+            return
+
+        clean = character.strip()
+        # Single letters A-Z: ALWAYS resolve strictly to char_{ch.upper()}.wav
+        if len(clean) == 1 and clean.isalpha():
+            char_wav = get_filipino_character_path(clean.upper())
+            if char_wav:
+                self.enqueue_wav(char_wav, interrupt=False)
+            return
+
+        # Digits, operators, punctuation:
+        char_wav = get_filipino_character_path(clean)
+        if char_wav:
+            self.enqueue_wav(char_wav, interrupt=False)
+            return
+
+        if use_filipino_voice:
             from brailce.i18n.fil_keys import get_filipino_keystroke_name
             ch_name = get_filipino_keystroke_name(character, style=style or self.letter_style)
             if ch_name:
                 self.enqueue_text(ch_name, interrupt=False)
-            else:
-                self._enqueue("char", (character, use_filipino_voice, style), interrupt=False)
+                return
+
+        self._enqueue("char", (character, use_filipino_voice, style), interrupt=False)
 
     def play_announcement(self, lang: str) -> bool:
         """Play 'Wikang Filipino' or 'English language' announcement."""
@@ -856,10 +887,10 @@ class FilipinoEngine:
     def _play_offline_concatenated_sentence(self, text: str, out_wav_path: str) -> bool:
         """
         Concatenate cached Filipino word WAVs into a single phrase with prosodic phrasing:
-        - Natural 80ms gap between consecutive words.
-        - 250ms prosody pause at comma, semicolon, or colon.
-        - 400ms prosody pause at terminal punctuation (. ! ? \n).
-        - If an individual word is out-of-vocabulary, synthesizes that single word via fallback.
+        - Exactly 10ms gap between consecutive words (int(framerate * 0.010)).
+        - Clean dynamic trimming of leading and trailing silence with 3-5ms micro-fade.
+        - 150ms prosody pause at comma, semicolon, or colon.
+        - 300ms prosody pause at terminal punctuation (. ! ? \n).
         """
         if not text:
             return False
@@ -878,17 +909,14 @@ class FilipinoEngine:
             return False
 
         framerate = TARGET_SAMPLE_RATE
-        gap_word = b"\x00\x00" * int(framerate * (max(0, getattr(self, "word_gap_ms", 10)) / 1000.0))
+        gap_samples = int(framerate * 0.010)  # Exactly 10ms
+        gap_word = b"\x00\x00" * gap_samples
         gap_comma = b"\x00\x00" * int(framerate * (max(50, getattr(self, "comma_pause_ms", 150)) / 1000.0))
         gap_period = b"\x00\x00" * int(framerate * (max(100, getattr(self, "sentence_pause_ms", 300)) / 1000.0))
         gap_semicolon = b"\x00\x00" * int(framerate * (max(50, getattr(self, "comma_pause_ms", 150)) / 1000.0))
 
         combined_pcm = bytearray()
         import numpy as np
-
-        fade_len = int(framerate * 0.012)  # 12ms smooth cosine edge fade
-        fade_in = 0.5 * (1.0 - np.cos(np.linspace(0, np.pi, fade_len))) if fade_len > 1 else None
-        fade_out = 0.5 * (1.0 + np.cos(np.linspace(0, np.pi, fade_len))) if fade_len > 1 else None
 
         for clause, delim in clauses:
             norm_clause = normalize_for_sherpa_filipino(clause)
@@ -907,14 +935,17 @@ class FilipinoEngine:
                         with wave.open(cached_wav, "rb") as wf:
                             raw_frames = wf.readframes(wf.getnframes())
                         arr = np.frombuffer(raw_frames, dtype=np.int16).copy()
-                        # Trim threshold ~ -45 dBFS (100 in 16-bit)
-                        nz = np.where(np.abs(arr) > 100)[0]
+                        # Dynamic clean silence trimming (> 120 amplitude threshold)
+                        nz = np.where(np.abs(arr) > 120)[0]
                         if nz.size > 0:
-                            pad = int(framerate * 0.008)  # 8ms margin
-                            trimmed = arr[max(0, int(nz[0]) - pad) : min(arr.size, int(nz[-1]) + pad)]
-                            if fade_len > 1 and len(trimmed) > (2 * fade_len):
-                                trimmed[:fade_len] = (trimmed[:fade_len].astype(np.float64) * fade_in).astype(np.int16)
-                                trimmed[-fade_len:] = (trimmed[-fade_len:].astype(np.float64) * fade_out).astype(np.int16)
+                            trimmed = arr[nz[0] : nz[-1] + 1].copy()
+                            # 3-5ms micro-fade at edges to prevent clicks/pops
+                            mf_len = min(int(framerate * 0.004), len(trimmed) // 4)
+                            if mf_len > 1:
+                                mf_in = 0.5 * (1.0 - np.cos(np.linspace(0, np.pi, mf_len)))
+                                mf_out = 0.5 * (1.0 + np.cos(np.linspace(0, np.pi, mf_len)))
+                                trimmed[:mf_len] = (trimmed[:mf_len].astype(np.float64) * mf_in).astype(np.int16)
+                                trimmed[-mf_len:] = (trimmed[-mf_len:].astype(np.float64) * mf_out).astype(np.int16)
                             pcm_data = trimmed.tobytes()
                         else:
                             pcm_data = raw_frames
@@ -957,15 +988,16 @@ class FilipinoEngine:
 
     def _play_offline_concatenated(self, words: List[str]) -> bool:
         """
-        Concatenate cached Filipino word WAVs (preserving hyphens) with a 50ms gap
-        and standardize loudness/sample rate. Zero English phonetic respelling!
+        Concatenate cached Filipino word WAVs with exact 10ms inter-word gap
+        and dynamic silence trimming.
         """
         tmp_fd, tmp_path = tempfile.mkstemp(prefix="brailce_fil_concat_", suffix=".wav")
         os.close(tmp_fd)
 
         try:
             framerate = TARGET_SAMPLE_RATE
-            gap_pcm = b"\x00\x00" * int(framerate * 0.050)
+            gap_samples = int(framerate * 0.010)  # Exactly 10ms
+            gap_pcm = b"\x00\x00" * gap_samples
             combined_pcm = bytearray()
 
             for i, raw_word in enumerate(words):
@@ -975,13 +1007,17 @@ class FilipinoEngine:
                     try:
                         with wave.open(cached_wav, "rb") as wf:
                             raw_frames = wf.readframes(wf.getnframes())
-                        # Trim outer padding from cached word so stitch is tight
                         import numpy as np
-                        arr = np.frombuffer(raw_frames, dtype=np.int16)
-                        nz = np.where(np.abs(arr) > 150)[0]
+                        arr = np.frombuffer(raw_frames, dtype=np.int16).copy()
+                        nz = np.where(np.abs(arr) > 120)[0]
                         if nz.size > 0:
-                            pad = int(framerate * 0.025)
-                            trimmed = arr[max(0, int(nz[0]) - pad) : min(arr.size, int(nz[-1]) + pad)]
+                            trimmed = arr[nz[0] : nz[-1] + 1].copy()
+                            mf_len = min(int(framerate * 0.004), len(trimmed) // 4)
+                            if mf_len > 1:
+                                mf_in = 0.5 * (1.0 - np.cos(np.linspace(0, np.pi, mf_len)))
+                                mf_out = 0.5 * (1.0 + np.cos(np.linspace(0, np.pi, mf_len)))
+                                trimmed[:mf_len] = (trimmed[:mf_len].astype(np.float64) * mf_in).astype(np.int16)
+                                trimmed[-mf_len:] = (trimmed[-mf_len:].astype(np.float64) * mf_out).astype(np.int16)
                             pcm_data = trimmed.tobytes()
                         else:
                             pcm_data = raw_frames
@@ -1017,14 +1053,37 @@ class FilipinoEngine:
     def speak_character(self, character: str, use_filipino_voice: bool = True, style: Optional[str] = None) -> bool:
         """
         Play character pronunciation in Filipino mode using the same speech call that words use.
+
+        Single letters A-Z ALWAYS resolve strictly to brailce/audio/filipino/char_{ch.upper()}.wav
+        (case-safe for Raspberry Pi Linux).
+        Never falls back to English voice, Piper, MMS-TTS, sherpa-onnx, or espeak.
         """
         if not character:
             return False
+
+        clean = character.strip()
         if use_filipino_voice:
+            # Single letters A-Z: strictly resolve to char_{ch.upper()}.wav
+            if len(clean) == 1 and clean.isalpha():
+                char_wav = get_filipino_character_path(clean.upper())
+                if char_wav and os.path.isfile(char_wav):
+                    logger.info("FilipinoEngine.speak_character: playing char WAV '%s'", char_wav)
+                    return AudioDeviceCoordinator.play_wav_file(char_wav, owner="filipino", timeout=5.0)
+                # Never fall back to English/male TTS or sherpa for single letters
+                return False
+
+            # Digits, operators, punctuation
+            char_wav = get_filipino_character_path(clean)
+            if char_wav and os.path.isfile(char_wav):
+                return AudioDeviceCoordinator.play_wav_file(char_wav, owner="filipino", timeout=5.0)
+
             from brailce.i18n.fil_keys import get_filipino_keystroke_name
             ch_name = get_filipino_keystroke_name(character, style=style or self.letter_style)
             if ch_name:
                 return self.speak_word(ch_name)
+            return False
+
+        # Non-letter / English characters
         if self.fallback_speech and hasattr(self.fallback_speech, "_character_engine"):
             char_eng = self.fallback_speech._character_engine
             if hasattr(char_eng, "play_cached_character") and char_eng.play_cached_character(character):
