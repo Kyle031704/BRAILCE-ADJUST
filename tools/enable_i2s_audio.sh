@@ -32,12 +32,13 @@ echo -e "Target config: ${CONFIG_FILE}"
 if grep -qE "dtoverlay=hifiberry-dac|dtoverlay=max98357a" "$CONFIG_FILE"; then
     echo -e "${GREEN}✓ I2S DAC overlay is already present in ${CONFIG_FILE}${NC}"
 else
-    echo -e "${YELLOW}Adding dtoverlay=hifiberry-dac to ${CONFIG_FILE}...${NC}"
+    echo -e "${YELLOW}Adding I2S DAC configuration to ${CONFIG_FILE}...${NC}"
     sudo bash -c "echo '' >> ${CONFIG_FILE}"
     sudo bash -c "echo '# Brailce I2S Audio DAC (MAX98357A)' >> ${CONFIG_FILE}"
+    sudo bash -c "echo 'dtparam=i2s=on' >> ${CONFIG_FILE}"
     sudo bash -c "echo 'dtoverlay=hifiberry-dac' >> ${CONFIG_FILE}"
     sudo bash -c "echo 'gpio=18,19,21=a0' >> ${CONFIG_FILE} 2>/dev/null || true"
-    echo -e "${GREEN}✓ Added dtoverlay=hifiberry-dac successfully!${NC}"
+    echo -e "${GREEN}✓ Added dtoverlay=hifiberry-dac and dtparam=i2s=on successfully!${NC}"
 fi
 
 # Configure default ALSA sound card for I2S DAC
@@ -58,5 +59,7 @@ EOF
 echo -e "${GREEN}✓ Configured ~/.asoundrc for sndrpihifiberry${NC}"
 
 echo ""
-echo -e "${YELLOW}IMPORTANT: A reboot is required for the Pi 5 to load the hardware I2S DAC driver.${NC}"
-echo -e "${YELLOW}Run: sudo reboot${NC}"
+echo -e "${GREEN}==================================================================${NC}"
+echo -e "${GREEN}   Tapos na! Mag-reboot na ngayon para mabasa ng Pi ang DAC:     ${NC}"
+echo -e "${GREEN}   sudo reboot                                                    ${NC}"
+echo -e "${GREEN}==================================================================${NC}"
