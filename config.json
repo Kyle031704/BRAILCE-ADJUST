@@ -6,6 +6,12 @@
   },
   "vision": {
     "driver": "usb",
+    "usb_device": 0,
     "confidence_threshold": 0.42
+  },
+  "ai": {
+    "enabled": true,
+    "host": "http://127.0.0.1:11434",
+    "model": "liquidai/lfm2.5-1.2b-instruct"
   }
 }

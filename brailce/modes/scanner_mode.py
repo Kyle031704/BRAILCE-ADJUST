@@ -75,7 +75,7 @@ class ScannerMode(BaseMode):
         self._readout_thread: Optional[threading.Thread] = None
         self._stop_readout_event = threading.Event()
         self._frame_lock = threading.Lock()
-        self._sharp_frames: Deque[Tuple[float, Any]] = deque(maxlen=5)
+        self._sharp_frames: Deque[Tuple[float, float, Any]] = deque(maxlen=15)
         self._latest_frame: Any = None
         self._braille_detected: Optional[bool] = None
         self._camera_error_reported: bool = False
@@ -272,7 +272,7 @@ class ScannerMode(BaseMode):
                         sharpness = compute_sharpness(frame)
                         with self._frame_lock:
                             self._latest_frame = frame
-                            self._sharp_frames.append((sharpness, frame))
+                            self._sharp_frames.append((time.monotonic(), sharpness, frame))
 
                         if getattr(self.app, "display", None) and not self._is_reading:
                             lang = self._lang()
@@ -348,27 +348,66 @@ class ScannerMode(BaseMode):
         if not played and speech:
             speech.speak_character(ch)
 
-    def _capture_best_still(self) -> Optional[Any]:
-        """Acquire sharpest buffered preview frame or live camera still."""
+    def _capture_candidate_frames(self) -> List[Any]:
+        """
+        Acquire candidate frames for OBR decode:
+        1. Pre-press stable frame: sharpest frame captured 0.25s to 1.2s before ENTER
+           (immune to the hand moving over the keyboard/device).
+        2. Fresh camera capture right now (or capture_sharpest if available).
+        3. Most recent sharp frame from the preview buffer.
+        """
         cam = getattr(self.app, "camera", None)
         if cam is None or (hasattr(cam, "is_available") and not cam.is_available()):
             self._report_camera_missing()
-            return None
+            return []
+
+        now = time.monotonic()
+        candidates: List[Any] = []
 
         with self._frame_lock:
-            if self._sharp_frames:
-                return max(self._sharp_frames, key=lambda item: item[0])[1].copy()
-            if self._latest_frame is not None and getattr(self._latest_frame, "size", 0) > 0:
-                return self._latest_frame.copy()
+            buffer_items = list(self._sharp_frames)
 
+        # 1. Look for pre-press stable frames (0.25s - 1.2s ago)
+        pre_press = [
+            item for item in buffer_items
+            if isinstance(item, (tuple, list)) and len(item) >= 3 and (0.25 <= (now - item[0]) <= 1.20)
+        ]
+        if pre_press:
+            best_pre = max(pre_press, key=lambda item: item[1])[2].copy()
+            candidates.append(best_pre)
+
+        # 2. Add fresh camera capture
         try:
-            return cam.capture_image()
+            if hasattr(cam, "capture_sharpest"):
+                fresh = cam.capture_sharpest()
+            else:
+                fresh = cam.capture_image()
+            if fresh is not None and getattr(fresh, "size", 0) > 0:
+                candidates.append(fresh)
         except CameraNotConnectedError:
             self._report_camera_missing()
-            return None
+            return candidates
         except Exception as exc:
-            logger.warning("Still capture failed: %s", exc)
-            return None
+            logger.debug("Candidate fresh capture failed: %s", exc)
+
+        # 3. Add overall sharpest buffered frame
+        if buffer_items:
+            def _get_sharp_frame(item):
+                if len(item) == 3:
+                    return item[1], item[2]
+                return item[0], item[1]
+
+            best_all = max(buffer_items, key=lambda item: _get_sharp_frame(item)[0])
+            candidates.append(_get_sharp_frame(best_all)[1].copy())
+        elif self._latest_frame is not None and getattr(self._latest_frame, "size", 0) > 0:
+            candidates.append(self._latest_frame.copy())
+
+        return candidates
+
+    def _capture_best_still(self) -> Optional[Any]:
+        """Acquire sharpest candidate frame for OBR scan."""
+        cands = self._capture_candidate_frames()
+        return cands[0] if cands else None
 
     def _start_scan(self) -> None:
         """Start full capture + classical OBR decode in background thread."""
@@ -385,16 +424,15 @@ class ScannerMode(BaseMode):
         threading.Thread(target=self._scan_worker, daemon=True).start()
 
     def _scan_worker(self) -> None:
-        """Capture sharpest image, run OBR engine, report actionable error or start readout."""
+        """Capture candidate frames, run OBR engine, report actionable error or start readout."""
         lang = self._lang()
         try:
             if not getattr(self.app, "obr", None):
                 self._report_camera_missing()
                 return
 
-            image = self._capture_best_still()
-            self._scanned_frame = image
-            if image is None:
+            candidates = self._capture_candidate_frames()
+            if not candidates:
                 if not self._camera_error_reported:
                     msg = get_string("SCANNER_NO_BRAILLE", lang)
                     if getattr(self.app, "display", None):
@@ -403,12 +441,28 @@ class ScannerMode(BaseMode):
                         self.app.speech.speak_text(msg, interrupt=True)
                 return
 
-            result = self.app.obr.process_image(image)
-            if not result.get("readable") or not str(result.get("text", "")).strip():
+            best_result = None
+            best_frame = None
+
+            for cand in candidates:
+                self._scanned_frame = cand
+                res = self.app.obr.process_image(cand)
+                if res.get("readable") and str(res.get("text", "")).strip():
+                    best_result = res
+                    best_frame = cand
+                    break
                 # Center-crop fallback if full-frame produced no readable text
-                result_center = self.app.obr.process_image(image, full_frame=False)
-                if result_center.get("readable") and str(result_center.get("text", "")).strip():
-                    result = result_center
+                res_center = self.app.obr.process_image(cand, full_frame=False)
+                if res_center.get("readable") and str(res_center.get("text", "")).strip():
+                    best_result = res_center
+                    best_frame = cand
+                    break
+                if best_result is None:
+                    best_result = res
+                    best_frame = cand
+
+            self._scanned_frame = best_frame
+            result = best_result or {"readable": False, "reason": "no_braille"}
 
             if not result.get("readable") or not str(result.get("text", "")).strip():
                 logger.warning("Scanner mode: scan unreadable, result=%r", result)

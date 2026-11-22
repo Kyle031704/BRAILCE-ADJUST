@@ -440,11 +440,12 @@ class OBREngine:
         # Dark blobs (shadows / ink dots)
         num_d, _, stats_d, cents_d = cv2.connectedComponentsWithStats(mask_d, connectivity=8)
         dark_blobs = []
+        max_dim = max(45.0, min(w, h) * 0.35)
         for lbl in range(1, num_d):
             area = float(stats_d[lbl, cv2.CC_STAT_AREA])
             bw = float(stats_d[lbl, cv2.CC_STAT_WIDTH])
             bh = float(stats_d[lbl, cv2.CC_STAT_HEIGHT])
-            if area < 3.0 or bw < 2.0 or bh < 2.0 or bw > (w * 0.12) or bh > (h * 0.12):
+            if area < 3.0 or bw < 2.0 or bh < 2.0 or bw > max_dim or bh > max_dim:
                 continue
             aspect = min(bw, bh) / max(1e-6, max(bw, bh))
             if aspect < 0.32:
@@ -461,7 +462,7 @@ class OBREngine:
             area = float(stats_l[lbl, cv2.CC_STAT_AREA])
             bw = float(stats_l[lbl, cv2.CC_STAT_WIDTH])
             bh = float(stats_l[lbl, cv2.CC_STAT_HEIGHT])
-            if area < 3.0 or bw < 2.0 or bh < 2.0 or bw > (w * 0.12) or bh > (h * 0.12):
+            if area < 3.0 or bw < 2.0 or bh < 2.0 or bw > max_dim or bh > max_dim:
                 continue
             aspect = min(bw, bh) / max(1e-6, max(bw, bh))
             if aspect < 0.32:
@@ -474,14 +475,14 @@ class OBREngine:
         if not dark_blobs:
             return [], 0.0
 
-        # Filter out fringe artifacts / anti-aliasing edge crescents (< 30% of median dot area)
+        # Filter out fringe artifacts (< 30% of median) and giant merged blobs (> 220% of median)
         if len(dark_blobs) >= 4:
             med_a_d = float(np.median([b["area"] for b in dark_blobs]))
-            dark_blobs = [b for b in dark_blobs if b["area"] >= (0.30 * med_a_d)]
+            dark_blobs = [b for b in dark_blobs if (0.30 * med_a_d) <= b["area"] <= (2.40 * med_a_d)]
 
         if len(light_blobs) >= 4:
             med_a_l = float(np.median([b["area"] for b in light_blobs]))
-            light_blobs = [b for b in light_blobs if b["area"] >= (0.30 * med_a_l)]
+            light_blobs = [b for b in light_blobs if (0.30 * med_a_l) <= b["area"] <= (2.00 * med_a_l)]
 
         if not dark_blobs:
             return [], 0.0
@@ -506,7 +507,7 @@ class OBREngine:
             if best_l is not None and best_dist >= (est_d * 0.25):
                 l_match = light_blobs[best_l]
                 diam_ratio = max(d_blob["d"], l_match["d"]) / max(1e-3, min(d_blob["d"], l_match["d"]))
-                if diam_ratio <= 2.2:
+                if diam_ratio <= 1.6:
                     used_l.add(best_l)
                     # Center of embossed dot is midpoint between shadow and highlight
                     cx = (d_blob["x"] + l_match["x"]) / 2.0
@@ -606,7 +607,7 @@ class OBREngine:
 
         # 1. Cluster into text lines by Y separation:
         # A single Braille line has height <= 2.0 * p_dot.
-        # Line grouping: dots with ry within 2.3 * p_dot of the line's top belong to the same line.
+        # Line grouping: dots with ry within 2.6 * p_dot of the line's top belong to the same line.
         rot_dots.sort(key=lambda d: d["ry"])
         lines: List[List[Dict[str, float]]] = []
         for d in rot_dots:
@@ -614,7 +615,7 @@ class OBREngine:
                 lines.append([d])
             else:
                 line_min_y = min(item["ry"] for item in lines[-1])
-                if (d["ry"] - line_min_y) <= (p_dot * 2.30):
+                if (d["ry"] - line_min_y) <= (p_dot * 2.60):
                     lines[-1].append(d)
                 else:
                     lines.append([d])
@@ -1037,24 +1038,6 @@ class OBREngine:
                 "lap_var": lap_var,
             }
 
-        # Check presence confidence to prevent hallucinating on terminal photos
-        conf = self.braille_presence_confidence(clean_crop)
-        if conf < 0.58 and len(dots) < 40:
-            os.makedirs("debug_scan", exist_ok=True)
-            cv2.imwrite("debug_scan/last_scan.jpg", dbg_img)
-            logger.info("Scanner result: dot_count=%d confidence=%.2f < 0.58 readable=False reason=no_braille", len(dots), conf)
-            return {
-                "readable": False,
-                "reason": "no_braille",
-                "text": "",
-                "words": [],
-                "cells": [],
-                "boxes": [],
-                "dots": [{"x": float(x0 + d["x"]), "y": float(y0 + d["y"])} for d in dots],
-                "dot_pitch": 0.0,
-                "lap_var": lap_var,
-            }
-
         res = self.decode_dots_to_text(dots, dot_diam, crop.shape)
         res["lap_var"] = lap_var
         res["dots"] = dots
@@ -1066,7 +1049,19 @@ class OBREngine:
         unknown_count = sum(1 for c in cells if c.get("char") == UNKNOWN_CELL_CHAR)
         unknown_ratio = (unknown_count / len(cells)) if cells else 0.0
 
-        if len(cells) >= 8 and unknown_ratio > 0.40:
+        conf = self.braille_presence_confidence(clean_crop)
+        res["confidence"] = conf
+
+        # Reject if no characters decoded or high unknown ratio on large text blocks
+        if not str(res.get("text", "")).strip():
+            res["readable"] = False
+            res["reason"] = "no_braille"
+            res["text"] = ""
+        elif conf < 0.35 and len(dots) < 6:
+            res["readable"] = False
+            res["reason"] = "no_braille"
+            res["text"] = ""
+        elif len(cells) >= 8 and unknown_ratio > 0.40:
             res["readable"] = False
             res["reason"] = "no_braille"
             res["text"] = ""
