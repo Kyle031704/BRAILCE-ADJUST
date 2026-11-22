@@ -564,9 +564,9 @@ class FilipinoEngine:
         max_queue_size: int = 50,
         pitch_semitones: float = 5.5,
         word_gap_ms: int = 10,
-        comma_pause_ms: int = 150,
-        sentence_pause_ms: int = 300,
-        char_gap_ms: int = 800,
+        comma_pause_ms: int = 100,
+        sentence_pause_ms: int = 160,
+        char_gap_ms: int = 250,
     ) -> None:
         self.fallback_speech = fallback_speech
         self.letter_style = "english_names"

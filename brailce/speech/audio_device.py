@@ -153,7 +153,7 @@ class AudioDeviceCoordinator:
                     cls.register_process(proc, owner)
                     proc.wait(timeout=timeout)
                     if proc.returncode == 0:
-                        time.sleep(0.12)  # Allow ALSA hardware ring buffer to completely drain to DAC
+                        time.sleep(0.02)  # Fast buffer drain for snappy word/sentence response
                         return True
                 except subprocess.TimeoutExpired:
                     if proc and proc.poll() is None:

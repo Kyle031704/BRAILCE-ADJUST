@@ -39,10 +39,10 @@ PUNCTUATION_NAME_MAP: Dict[str, str] = dict(PUNCTUATION_MAP)
 
 VALID_BEHAVIORS = {"character", "character_and_word", "completed_text_only"}
 
-# Standardized response speech constants (Task 2)
+# Standardized response speech constants (Task 2) - Optimized for low latency
 WORD_GAP_MS: int = 10
-COMMA_PAUSE_MS: int = 150
-SENTENCE_PAUSE_MS: int = 300
+COMMA_PAUSE_MS: int = 100
+SENTENCE_PAUSE_MS: int = 160
 
 
 class SpeechService(SpeechEngine):
@@ -339,7 +339,7 @@ class SpeechService(SpeechEngine):
                 comm = edge_tts.Communicate(clean, "fil-PH-BlessicaNeural", rate="+3%", pitch="+1Hz")
                 await comm.save(tmp_mp3)
                 subprocess.run(
-                    ["ffmpeg", "-y", "-i", tmp_mp3, "-ar", "22050", "-ac", "1", "-filter:a", "volume=2.2", cached_wav],
+                    ["ffmpeg", "-y", "-i", tmp_mp3, "-ar", "22050", "-ac", "1", cached_wav],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     check=True,
@@ -582,10 +582,10 @@ class SpeechService(SpeechEngine):
         fil_letter_voice = str(speech_cfg.get("filipino_letter_voice", "filipino")).lower()
         fil_voice = str(speech_cfg.get("filipino_voice", "sherpa_mms_tgl")).lower()
         fil_pitch = float(speech_cfg.get("filipino_pitch_semitones", 3.5))
-        fil_word_gap = int(speech_cfg.get("filipino_word_gap_ms", 30))
-        fil_comma_pause = int(speech_cfg.get("filipino_comma_pause_ms", 220))
-        fil_sentence_pause = int(speech_cfg.get("filipino_sentence_pause_ms", 380))
-        fil_char_gap = int(speech_cfg.get("filipino_char_gap_ms", 800))
+        fil_word_gap = int(speech_cfg.get("filipino_word_gap_ms", 10))
+        fil_comma_pause = int(speech_cfg.get("filipino_comma_pause_ms", 100))
+        fil_sentence_pause = int(speech_cfg.get("filipino_sentence_pause_ms", 160))
+        fil_char_gap = int(speech_cfg.get("filipino_char_gap_ms", 250))
 
         piper = PiperEngine(
             rate=rate,
