@@ -14,17 +14,24 @@ echo -e "${GREEN}     Brailce: Upgrading All Voices to Studio Female Voice      
 echo -e "${BLUE}==================================================================${NC}"
 echo ""
 
-cd "$HOME/BRAILCE-ADJUST"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$SCRIPT_DIR"
+
+REAL_USER="${SUDO_USER:-$USER}"
+USER_HOME=$(eval echo "~$REAL_USER")
 
 # 1. Configure clean ALSA plug for I2S DAC (Direct hardware connection, zero dmix jitter/softvol clipping)
 echo -e "${YELLOW}[1/4] Configuring clean ALSA hardware audio route...${NC}"
 
-DAC_CARD=$(aplay -l 2>/dev/null | grep -iE "dac|hifiberry|i2s|max98357" | head -n1 | sed -n 's/card \([0-9]\):.*/\1/p' || true)
+DAC_CARD=$(aplay -l 2>/dev/null | grep -iE "snd_rpi_hifiberry|hifiberry|max98357|pcm5102a" | head -n1 | sed -n 's/card \([0-9]\):.*/\1/p' || true)
 if [ -z "$DAC_CARD" ]; then
-    DAC_CARD="sndrpihifiberry"
+    DAC_CARD=2
 fi
 
-cat <<EOF > "$HOME/.asoundrc"
+echo -e "${GREEN}✓ Identified I2S Audio DAC on Card: ${DAC_CARD}${NC}"
+
+for TARGET_RC in "$USER_HOME/.asoundrc" "$HOME/.asoundrc"; do
+    cat <<EOF > "$TARGET_RC"
 pcm.!default {
     type plug
     slave.pcm {
@@ -38,6 +45,8 @@ ctl.!default {
     card $DAC_CARD
 }
 EOF
+    chown "$REAL_USER":"$REAL_USER" "$TARGET_RC" 2>/dev/null || true
+done
 
 sudo tee /etc/asound.conf > /dev/null <<EOF
 pcm.!default {

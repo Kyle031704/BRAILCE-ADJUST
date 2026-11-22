@@ -1,4 +1,4 @@
-﻿"""
+"""
 Brailce Audio Device Coordinator
 ===============================
 
@@ -51,7 +51,9 @@ def _find_best_alsa_device() -> Optional[str]:
                 # Verify card has playback subdevice (pcm*p), not capture-only microphone
                 if any(p.is_dir() and p.name.endswith("p") for p in card_dir.glob("pcm*")):
                     full = (name + " " + desc).lower()
-                    if any(k in full for k in ["dac", "hifiberry", "max98357", "snd_rpi", "i2s"]):
+                    if "hdmi" in full:
+                        continue
+                    if any(k in full for k in ["dac", "hifiberry", "max98357", "snd_rpi", "pcm5102a"]):
                         dac_card = num
                     elif "usb" in full and not any(k in full for k in ["cam", "webcam"]):
                         usb_card = num
