@@ -27,6 +27,14 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# Auto-switch to ~/venv on Linux/Raspberry Pi so luma.lcd display drivers and SPI packages are always loaded
+if sys.platform != "win32":
+    import os
+    venv_python = os.path.expanduser("~/venv/bin/python3")
+    if os.path.isfile(venv_python) and sys.executable != venv_python and not os.environ.get("BRAILCE_VENV_SWITCHED"):
+        os.environ["BRAILCE_VENV_SWITCHED"] = "1"
+        os.execv(venv_python, [venv_python] + sys.argv)
+
 # Ensure UTF-8 output on Windows consoles to prevent charmap encoding errors
 if sys.platform == "win32":
     try:

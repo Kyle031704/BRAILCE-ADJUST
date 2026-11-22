@@ -196,7 +196,7 @@ class AudioDeviceCoordinator:
         try:
             # Combined real volume channel: static gain + softvol percentage
             gain_db = cls._gain_db + float(np.log10(max(cls._volume_pct, 1) / 100.0)) * 20.0
-            if abs(gain_db) < 0.05 or not wav_path or not os.path.isfile(wav_path):
+            if not wav_path or not os.path.isfile(wav_path):
                 return (wav_path, False)
             key = (
                 os.path.abspath(wav_path),
@@ -214,8 +214,26 @@ class AudioDeviceCoordinator:
                 nchannels = wf.getnchannels()
                 framerate = wf.getframerate()
                 raw = wf.readframes(wf.getnframes())
-            samples = np.frombuffer(raw, dtype=np.int16).astype(np.float64) / 32768.0
-            out = samples * (10.0 ** (gain_db / 20.0))
+
+            needs_format_fix = (framerate != 44100 or nchannels != 2)
+            if abs(gain_db) < 0.05 and not needs_format_fix:
+                return (wav_path, False)
+
+            samples = np.frombuffer(raw, dtype=np.int16)
+            if nchannels == 2:
+                samples = samples.reshape(-1, 2)
+                mono = samples.mean(axis=1).astype(np.float64) / 32768.0
+            else:
+                mono = samples.astype(np.float64) / 32768.0
+
+            if framerate != 44100:
+                if framerate == 22050:
+                    mono = np.repeat(mono, 2)
+                else:
+                    target_len = int(len(mono) * 44100.0 / framerate)
+                    mono = np.interp(np.linspace(0, len(mono), target_len, endpoint=False), np.arange(len(mono)), mono)
+
+            out = mono * (10.0 ** (gain_db / 20.0))
             if gain_db > 0.05:
                 # Limiter is ONLY engaged when positive software boost is applied and exceeds safe headroom
                 KNEE_START = 0.88
@@ -229,14 +247,17 @@ class AudioDeviceCoordinator:
                 out = np.sign(out) * np.minimum(np.abs(out), ceiling)
             else:
                 out = np.clip(out, -1.0, 1.0)
+
             out_int16 = np.clip(out * 32767.0, -32767.0, 32767.0).astype(np.int16)
+            stereo = np.column_stack((out_int16, out_int16))
+
             fd, tmp_path = tempfile.mkstemp(suffix=".wav", prefix="brailce_gain_")
             os.close(fd)
             with wave.open(tmp_path, "wb") as wf_out:
-                wf_out.setnchannels(nchannels)
-                wf_out.setsampwidth(sampwidth)
-                wf_out.setframerate(framerate)
-                wf_out.writeframes(out_int16.tobytes())
+                wf_out.setnchannels(2)
+                wf_out.setsampwidth(2)
+                wf_out.setframerate(44100)
+                wf_out.writeframes(stereo.tobytes())
             cls._gain_cache[key] = tmp_path
             while len(cls._gain_cache) > 32:
                 try:
