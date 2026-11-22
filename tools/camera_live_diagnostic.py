@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import cv2
 import numpy as np
-from brailce.vision.camera import USBCameraDevice, compute_sharpness
+from brailce.vision.camera import UsbWebcamDevice, PiCameraDevice, compute_sharpness
 from brailce.vision.obr_engine import OBREngine
 from brailce.config.manager import ConfigManager
 
@@ -107,12 +107,24 @@ def main():
 
     cfg = ConfigManager()
     vision_cfg = cfg.get("vision", default={})
-    cam_index = vision_cfg.get("camera_index", 0)
+    cam_index = vision_cfg.get("usb_device", vision_cfg.get("camera_index", 0))
 
-    print("Initializing USBCameraDevice...")
-    cam = USBCameraDevice(camera_index=cam_index, resolution=(1280, 720))
-    if not cam.is_available():
-        print(f"[ERROR] Camera at index {cam_index} not available!")
+    print(f"Initializing UsbWebcamDevice (device {cam_index})...")
+    cam = None
+    try:
+        cam = UsbWebcamDevice(device=cam_index, resolution=(1280, 720))
+    except Exception as exc:
+        print(f"[WARN] USB webcam open with device={cam_index} failed: {exc}")
+
+    if cam is None or not cam.is_available():
+        print("[INFO] Trying PiCameraDevice fallback...")
+        try:
+            cam = PiCameraDevice()
+        except Exception:
+            pass
+
+    if cam is None or not cam.is_available():
+        print(f"[ERROR] Camera not available! Check USB webcam cable connection.")
         sys.exit(1)
 
     obr = OBREngine()
@@ -129,10 +141,12 @@ def main():
         except KeyboardInterrupt:
             print("\nStopped diagnostic loop.")
         finally:
-            cam.release()
+            if hasattr(cam, "close"):
+                cam.close()
     else:
         run_single_diagnostic(cam, obr)
-        cam.release()
+        if hasattr(cam, "close"):
+            cam.close()
 
 
 if __name__ == "__main__":
