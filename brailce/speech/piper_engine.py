@@ -190,7 +190,24 @@ class PiperEngine(SpeechEngine):
         """Emergency fallback to system espeak-ng when Piper is unavailable."""
         try:
             cmd = shutil.which("espeak-ng") or shutil.which("espeak")
-            if cmd:
+            if not cmd:
+                return
+            # Synthesize to temp WAV and play through AudioDeviceCoordinator for reliable DAC routing
+            tmp_wav = f"/tmp/espeak_fallback_{os.getpid()}.wav"
+            res = subprocess.run(
+                [cmd, "-s", str(self._rate), "-a", str(self._volume), "-w", tmp_wav, text],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+            if res.returncode == 0 and os.path.isfile(tmp_wav):
+                AudioDeviceCoordinator.play_wav_file(tmp_wav, owner="espeak_fallback", timeout=15.0)
+                try:
+                    os.remove(tmp_wav)
+                except Exception:
+                    pass
+            else:
+                # Direct audio execution as last resort
                 subprocess.run(
                     [cmd, "-s", str(self._rate), "-a", str(self._volume), text],
                     stdout=subprocess.DEVNULL,
