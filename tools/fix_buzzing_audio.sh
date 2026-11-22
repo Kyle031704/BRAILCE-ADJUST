@@ -43,9 +43,17 @@ pcm.dmixer {
     }
 }
 
+pcm.softvol {
+    type softvol
+    slave.pcm "dmixer"
+    control {
+        name "Master"
+    }
+}
+
 pcm.!default {
     type plug
-    slave.pcm "dmixer"
+    slave.pcm "softvol"
 }
 
 ctl.!default {
@@ -53,15 +61,58 @@ ctl.!default {
     card sndrpihifiberry
 }
 EOF
+
+sudo tee /etc/asound.conf > /dev/null <<'EOF'
+pcm.dmixer {
+    type dmix
+    ipc_key 1024
+    ipc_perm 0666
+    slave {
+        pcm "hw:CARD=sndrpihifiberry,DEV=0"
+        period_time 0
+        period_size 1024
+        buffer_size 8192
+        rate 44100
+        channels 2
+    }
+    bindings {
+        0 0
+        1 1
+    }
+}
+
+pcm.softvol {
+    type softvol
+    slave.pcm "dmixer"
+    control {
+        name "Master"
+    }
+}
+
+pcm.!default {
+    type plug
+    slave.pcm "softvol"
+}
+
+ctl.!default {
+    type hw
+    card sndrpihifiberry
+}
+EOF
+
 echo -e "${GREEN}✓ ~/.asoundrc configured for rock-solid 44.1 kHz stereo PLL lock.${NC}"
 
 # 3. Activate venv & generate clean 44.1kHz stereo audio assets
-echo -e "${YELLOW}[3/4] Re-generating English voice assets to 44.1kHz stereo (clean peak)...${NC}"
+echo -e "${YELLOW}[3/4] Voice assets (regeneration only when BRAILCE_REGEN_VOICE=1)...${NC}"
 if [ -f "$HOME/venv/bin/activate" ]; then
     source "$HOME/venv/bin/activate"
 fi
 
-python tools/upgrade_audio_female.py
+if [ "${BRAILCE_REGEN_VOICE:-0}" = "1" ]; then
+    python tools/upgrade_audio_female.py || echo "WARN: voice regeneration failed (offline?) — .asoundrc and configs are still applied."
+else
+    echo "Skipping voice bank regeneration (set BRAILCE_REGEN_VOICE=1 to regenerate characters/*.wav)."
+fi
 
 # 4. Start Brailce
 echo ""
@@ -69,4 +120,8 @@ echo -e "${GREEN}===============================================================
 echo -e "${GREEN}   ✓ ALL AUDIO CLEANED & UNBUZZED! Launching Brailce...           ${NC}"
 echo -e "${GREEN}==================================================================${NC}"
 echo ""
-python main.py
+if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet brailce.service 2>/dev/null; then
+    echo "brailce.service is active — skipping interactive launch (dmix would mix two instances). Reboot or restart the service to apply changes."
+else
+    python main.py
+fi

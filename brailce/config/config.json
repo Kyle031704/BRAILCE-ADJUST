@@ -28,7 +28,8 @@
         "voice": "en-us+m3",
         "rate": 165,
         "pitch": 52,
-        "volume": 100,
+        "volume": 85,
+        "output_gain_db": 0.0,
         "word_gap_ms": 5,
         "speak_each_character": true,
         "speak_words": true,
@@ -42,7 +43,7 @@
         "filipino_sentence_pause_ms": 380,
         "char_gap_ms": 800,
         "filipino_char_gap_ms": 800,
-        "filipino_pitch_semitones": 3.5,
+        "filipino_pitch_semitones": 0.0,
         "max_queue_size": 50
     },
 

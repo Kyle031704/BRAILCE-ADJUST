@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import subprocess
 import threading
 from typing import Any, Dict, Optional, Tuple
 
@@ -64,7 +65,7 @@ class SpeechService(SpeechEngine):
         filipino_letter_voice: str = "filipino",
         filipino_letter_style: str = "english_names",
         filipino_voice: str = "friendly_prerendered_plus_offline",
-        filipino_pitch_semitones: float = 3.5,
+        filipino_pitch_semitones: float = 0.0,
         filipino_word_gap_ms: int = 30,
         filipino_comma_pause_ms: int = 220,
         filipino_sentence_pause_ms: int = 380,
@@ -125,7 +126,7 @@ class SpeechService(SpeechEngine):
             from brailce.speech.filipino_engine import FilipinoEngine
             self._filipino_engine = FilipinoEngine(
                 fallback_speech=self,
-                pitch_semitones=getattr(self, "_filipino_pitch_semitones", 3.5),
+                pitch_semitones=getattr(self, "_filipino_pitch_semitones", 0.0),
                 word_gap_ms=getattr(self, "_filipino_word_gap_ms", 30),
                 comma_pause_ms=getattr(self, "_filipino_comma_pause_ms", 220),
                 sentence_pause_ms=getattr(self, "_filipino_sentence_pause_ms", 380),
@@ -174,6 +175,11 @@ class SpeechService(SpeechEngine):
     def set_volume(self, volume: int) -> None:
         self._volume = volume
         self._engine.set_volume(volume)
+        try:
+            clamped = max(0, min(100, int(volume)))
+            AudioDeviceCoordinator.set_volume(clamped)
+        except Exception as e:
+            logger.debug("Error setting audio device volume: %s", e)
 
     def set_pitch(self, pitch: int) -> None:
         self._pitch = pitch
@@ -581,11 +587,12 @@ class SpeechService(SpeechEngine):
         max_queue = int(speech_cfg.get("max_queue_size", 50))
         fil_letter_voice = str(speech_cfg.get("filipino_letter_voice", "filipino")).lower()
         fil_voice = str(speech_cfg.get("filipino_voice", "sherpa_mms_tgl")).lower()
-        fil_pitch = float(speech_cfg.get("filipino_pitch_semitones", 3.5))
+        fil_pitch = float(speech_cfg.get("filipino_pitch_semitones", 0.0))
         fil_word_gap = int(speech_cfg.get("filipino_word_gap_ms", 10))
         fil_comma_pause = int(speech_cfg.get("filipino_comma_pause_ms", 100))
         fil_sentence_pause = int(speech_cfg.get("filipino_sentence_pause_ms", 160))
         fil_char_gap = int(speech_cfg.get("filipino_char_gap_ms", 250))
+        output_gain_db = float(speech_cfg.get("output_gain_db", 6.0))
 
         piper = PiperEngine(
             rate=rate,
@@ -599,6 +606,15 @@ class SpeechService(SpeechEngine):
             main_engine = espeak
         else:
             main_engine = piper
+
+        try:
+            AudioDeviceCoordinator.set_gain_db(output_gain_db)
+        except Exception as e:
+            logger.debug("Error applying output gain: %s", e)
+        try:
+            AudioDeviceCoordinator.set_volume(max(0, min(100, volume)))
+        except Exception as e:
+            logger.debug("Error setting initial audio volume: %s", e)
 
         return cls(
             character_engine=main_engine,

@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 def pitch_shift_pcm(samples: Any, semitones: float, sr: int = TARGET_SAMPLE_RATE) -> Any:
     """
     Fast, dependency-light phase-vocoder pitch shifter in pure numpy.
-    Raises pitch by semitones (+3 to +4 semitones) while preserving duration and formants.
+    Raises pitch by the given semitones while preserving duration and formants.
     """
     if abs(semitones) < 0.05 or getattr(samples, "size", 0) < 512:
         return samples
@@ -562,7 +562,7 @@ class FilipinoEngine:
         self,
         fallback_speech: Optional[SpeechEngine] = None,
         max_queue_size: int = 50,
-        pitch_semitones: float = 5.5,
+        pitch_semitones: float = 0.0,
         word_gap_ms: int = 10,
         comma_pause_ms: int = 100,
         sentence_pause_ms: int = 160,
@@ -830,7 +830,7 @@ class FilipinoEngine:
     def _synthesize_sherpa_filipino(self, text: str, out_wav_path: str) -> bool:
         """
         Synthesize Filipino text using sherpa-onnx OfflineTts (MMS-TTS tgl VITS),
-        split gently on sentence boundaries for natural pacing, apply pitch shift (+3.5 st),
+        split gently on sentence boundaries for natural pacing, apply optional pitch shift,
         then convert to 22050 Hz mono s16, RMS-normalized, with standard pre/post silence padding.
         """
         tts = self._get_sherpa_tts()
@@ -882,7 +882,7 @@ class FilipinoEngine:
 
             combined = np.concatenate(all_chunks)
 
-            # Apply pitch shift (+3.5 semitones for friendlier, lighter offline voice)
+            # Apply pitch shift only when a non-zero shift is configured
             if getattr(self, "pitch_semitones", 0.0) != 0.0:
                 combined = pitch_shift_pcm(combined, self.pitch_semitones, src_sr)
 
