@@ -15,7 +15,7 @@ import os
 import re
 import threading
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from brailce.core.events import AppMode, EventType, InputEvent
 from brailce.modes.base_mode import BaseMode
@@ -75,6 +75,10 @@ class AIAssistantMode(BaseMode):
     Supports '#' number sign to enter digits using keys A-J.
     """
 
+    def __init__(self, app: Any) -> None:
+        super().__init__(app)
+        self._cancel_event = threading.Event()
+
     @property
     def filipino_engine(self):
         if not hasattr(self, "_filipino_engine") or self._filipino_engine is None:
@@ -92,6 +96,11 @@ class AIAssistantMode(BaseMode):
 
     def handle_event(self, event: InputEvent) -> None:
         """Process an input event in AI Assistant Mode."""
+        if event.event_type == EventType.STOP_PRESSED:
+            # Esc: cancel a pending AI request so typing works again immediately
+            self._cancel_pending_request()
+            return
+
         if self.state.ai_processing:
             # Ignore inputs while processing
             return
@@ -180,6 +189,16 @@ class AIAssistantMode(BaseMode):
             from brailce.i18n.strings import get_string
             self.app.speech.speak_text(get_string("CLEARED", self.state.language), interrupt=True)
 
+    def _cancel_pending_request(self) -> None:
+        """Esc: cancel a pending AI request and reset the processing state."""
+        if not self.state.ai_processing:
+            return
+        logger.info("AI request cancelled by stop pressed.")
+        self._cancel_event.set()
+        self.state.ai_processing = False
+        if self.app.display:
+            self.app.display.show_text_buffer(self.state.ai_query_buffer)
+
     def _handle_enter(self) -> None:
         """Submit the accumulated query to Ollama and speak response."""
         query = self.state.get_ai_query()
@@ -202,11 +221,15 @@ class AIAssistantMode(BaseMode):
             self.app.speech.speak_sentence(query, interrupt=False)
 
         # Start background thread for Ollama inference
+        self._cancel_event.clear()
         threading.Thread(target=self._process_query, args=(query,), daemon=True).start()
 
     def _process_query(self, query: str) -> None:
         from brailce.i18n.strings import get_string
         lang = self.state.language
+
+        if self._cancel_event.is_set():
+            return
 
         if self.app.speech:
             self.app.speech.speak_text(get_string("AI_THINKING", lang), interrupt=False)
@@ -232,6 +255,9 @@ class AIAssistantMode(BaseMode):
             self._finish_processing(response, query=query)
 
     def _finish_processing(self, response: str, query: str = "") -> None:
+        if self._cancel_event.is_set():
+            # Esc cancelled this request: discard the late response silently
+            return
         self.state.ai_processing = False
         from brailce.ai.ollama_client import clean_ai_response
         cleaned = clean_ai_response(response) if response else response

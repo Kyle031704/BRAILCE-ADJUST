@@ -13,7 +13,7 @@ Brailce is a portable **Raspberry Pi 5** assistive learning device for visually 
 | **AI Assistant** | Offline Ollama (`lfm2.5-1.2b-instruct`) Q&A with bilingual guardrails and clean spoken normalization | Question input + `Enter` |
 | **Scanner Mode** | Offline classical dot-level Grade 1 Braille camera scanner with live presence detection and letter -> word readout | Position sheet, `Enter` to scan/repeat, any key to stop, `Clear` to reset |
 
-Desktop controls during simulation: `A–Z`, `0–9`, `+ - * /`, `Space`, `Enter`, `Backspace`, `F1` (Mode), `F2` (Clear), `F3` (Language EN/FIL), `F11`/`F12` (Volume Down/Up), `Esc` (Quit).
+Desktop controls during simulation: `A–Z`, `0–9`, `+ - * /`, `Space`, `Enter`, `Backspace`, `F1` (Mode), `F2` (Clear), `F3` (Language EN/FIL), `F11`/`F12` (Volume Down/Up), `Esc` (Stop speech/readout/AI request), `Ctrl+C` or `Ctrl+Q` (Quit).
 
 ---
 

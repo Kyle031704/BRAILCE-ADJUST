@@ -326,6 +326,22 @@ class BrailceApp:
                 self.state.is_running = False
                 return
 
+            if event.event_type == EventType.STOP_PRESSED:
+                # Esc: stop speech and the current mode activity without quitting
+                logger.info("Stop pressed event received.")
+                if self.speech:
+                    try:
+                        self.speech.stop()
+                    except Exception:
+                        logger.exception("Error stopping speech on stop pressed.")
+                if self._active_mode:
+                    self._active_mode.handle_event(event)
+                # A pending AI request survives mode switches; cancel it too
+                ai_mode = self._modes.get(AppMode.AI_ASSISTANT)
+                if ai_mode and self.state.ai_processing:
+                    ai_mode.handle_event(event)
+                return
+
             if event.event_type == EventType.MODE_PRESSED:
                 self.mode_manager.toggle()
                 return

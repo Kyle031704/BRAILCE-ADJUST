@@ -88,3 +88,10 @@
 2. **Preview Colors:** Enter Scanner Mode and verify the live camera preview colors on the LCD are natural (not bluish). If your camera sensor delivers inverted colors, set `SWAP_RED_BLUE = True` in `brailce/vision/camera.py`.
 3. **ROI Size:** Confirm the green centered ROI rectangle on the LCD comfortably encompasses your Braille cards or embossed sheet. Adjust `ROI_W_FRAC` and `ROI_H_FRAC` in `brailce/vision/obr_engine.py` if needed.
 4. **Scanning Real Braille:** Place a Braille card centered in the viewfinder, press Enter, and verify the letter-by-letter spelling followed by the whole word pronunciation. Check `debug_scan/last_scan.jpg` to inspect the detected dot lattice.
+
+---
+## JOB 1: Esc Stops Current Activity (Not Quit)
+- **Status:** DONE
+- **Files Changed:** `brailce/core/events.py`, `brailce/input/keyboard_input.py`, `brailce/core/app.py`, `brailce/modes/scanner_mode.py`, `brailce/modes/ai_assistant.py`, `README.md`, `brailce/tests/test_esc_stops.py`
+- **Summary:** Added `EventType.STOP_PRESSED`. Both bare-Esc sites in `keyboard_input.py` (terminal pure-ESC branch and `esc` key hook) now emit STOP_PRESSED instead of QUIT; PuTTY F1/F2/F3 escape sequences are unchanged; Ctrl+C still quits and Ctrl+Q was added as an alternate quit key. `BrailceApp` handles STOP_PRESSED by calling `speech.stop()` (stops engines, clears queues, and interrupts active playback) and forwarding the event to the active mode: ScannerMode sets its existing `_stop_readout_event` flag so readout/spelling threads wind down, AIAssistantMode cancels pending requests via a new `_cancel_event` the worker checks. Esc no longer changes modes or exits; typing stays usable. README quit hint updated (no Esc hints existed in i18n strings).
+- **Tests:** `brailce/tests/test_esc_stops.py`: bare Esc emits STOP_PRESSED and never QUIT (terminal + key hook), Ctrl+C/Ctrl+Q still emit QUIT, 12 PuTTY F1/F2/F3 sequence variants keep their events, plus scanner readout/scan wind-down, AI cancellation, and app dispatch tests.

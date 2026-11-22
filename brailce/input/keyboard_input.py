@@ -190,6 +190,11 @@ class KeyboardInputDevice(InputDevice):
                 self._running = False
                 self._emit_event(control_event(EventType.QUIT, self.SOURCE_NAME))
                 return
+            elif ch == "\x11":  # Ctrl+Q -> clean exit (alternative quit key)
+                logger.info("Terminal listener: Ctrl+Q received, emitting QUIT")
+                self._running = False
+                self._emit_event(control_event(EventType.QUIT, self.SOURCE_NAME))
+                return
             elif ch == "\x1b":
                 # Check if this is an escape sequence (e.g. F1, F2 in PuTTY)
                 import sys
@@ -208,8 +213,9 @@ class KeyboardInputDevice(InputDevice):
                     self._emit_event(control_event(EventType.LANGUAGE_TOGGLE, self.SOURCE_NAME))
                 elif seq in ("OR", "[13~", "[[C", "O1;2R"):  # F3 key in PuTTY -> CLEAR_PRESSED
                     self._emit_event(control_event(EventType.CLEAR_PRESSED, self.SOURCE_NAME))
-                elif not seq:  # Pure ESC key
-                    self._emit_event(control_event(EventType.QUIT, self.SOURCE_NAME))
+                elif not seq:  # Pure ESC key -> stop current activity (Ctrl+C / Ctrl+Q quits)
+                    logger.info("Terminal listener: bare Esc received, emitting STOP_PRESSED")
+                    self._emit_event(control_event(EventType.STOP_PRESSED, self.SOURCE_NAME))
             elif ch in ("\t", "\x09"):  # TAB -> Change Mode (cycles Free Input -> Math -> AI -> Scanner)
                 self._emit_event(control_event(EventType.MODE_PRESSED, self.SOURCE_NAME))
             elif ch in ("`", "~"):  # Backtick / Tilde -> Toggle Language ([EN] <-> [FIL])
@@ -257,6 +263,12 @@ class KeyboardInputDevice(InputDevice):
 
         # ---- Control keys ----
         if key_name.lower() == "esc":
+            # Bare Esc stops speech/current activity; Ctrl+C or Ctrl+Q quits
+            logger.info("Key hook: bare Esc received, emitting STOP_PRESSED")
+            self._emit_event(control_event(EventType.STOP_PRESSED, self.SOURCE_NAME))
+            return
+
+        if key_name.lower() == "ctrl+q":
             self._emit_event(control_event(EventType.QUIT, self.SOURCE_NAME))
             return
 

@@ -65,6 +65,7 @@ class EventType(Enum):
     LANGUAGE_TOGGLE = auto()
     VOLUME_UP = auto()
     VOLUME_DOWN = auto()
+    STOP_PRESSED = auto()
 
     # System events
     QUIT = auto()

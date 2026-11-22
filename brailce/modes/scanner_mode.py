@@ -131,6 +131,11 @@ class ScannerMode(BaseMode):
 
     def handle_event(self, event: InputEvent) -> None:
         """Handle user input in Scanner Mode."""
+        if event.event_type == EventType.STOP_PRESSED:
+            # Esc: wind down readout/spelling via the existing stop flag (app already stopped speech)
+            self._stop_readout(announce_stopped=self._is_reading)
+            return
+
         if self._is_reading:
             # Any key cleanly interrupts active speech readout
             self._stop_readout(announce_stopped=True)
@@ -414,6 +419,7 @@ class ScannerMode(BaseMode):
         self._is_scanning = True
         self.scanned_text = None
         self._last_result = None
+        self._stop_readout_event.clear()
         lang = self._lang()
 
         if getattr(self.app, "display", None):
@@ -463,6 +469,10 @@ class ScannerMode(BaseMode):
 
             self._scanned_frame = best_frame
             result = best_result or {"readable": False, "reason": "no_braille"}
+
+            if self._stop_readout_event.is_set():
+                # Esc pressed during scan: discard result without announcements or readout
+                return
 
             if not result.get("readable") or not str(result.get("text", "")).strip():
                 logger.warning("Scanner mode: scan unreadable, result=%r", result)
