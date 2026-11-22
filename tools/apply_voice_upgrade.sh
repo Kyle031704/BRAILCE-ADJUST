@@ -16,84 +16,41 @@ echo ""
 
 cd "$HOME/BRAILCE-ADJUST"
 
-# 1. Clean pin conflict & configure ALSA 44.1kHz stereo dmixer
-echo -e "${YELLOW}[1/4] Fixing pinmux and configuring 44.1 kHz stereo dmixer...${NC}"
-sudo sed -i '/gpio=18,19,21=a0/d' /boot/firmware/config.txt 2>/dev/null || true
-sudo sed -i '/gpio=18,19,21=a0/d' /boot/config.txt 2>/dev/null || true
+# 1. Configure clean ALSA plug for I2S DAC (Direct hardware connection, zero dmix jitter/softvol clipping)
+echo -e "${YELLOW}[1/4] Configuring clean ALSA hardware audio route...${NC}"
 
-cat <<'EOF' > "$HOME/.asoundrc"
-pcm.dmixer {
-    type dmix
-    ipc_key 1024
-    ipc_perm 0666
-    slave {
-        pcm "hw:CARD=sndrpihifiberry,DEV=0"
-        period_time 0
-        period_size 1024
-        buffer_size 8192
-        rate 44100
-        channels 2
-    }
-    bindings {
-        0 0
-        1 1
-    }
-}
+DAC_CARD=$(aplay -l 2>/dev/null | grep -iE "dac|hifiberry|i2s|max98357" | head -n1 | sed -n 's/card \([0-9]\):.*/\1/p' || true)
+if [ -z "$DAC_CARD" ]; then
+    DAC_CARD="sndrpihifiberry"
+fi
 
-pcm.softvol {
-    type softvol
-    slave.pcm "dmixer"
-    control {
-        name "Master"
-    }
-}
-
+cat <<EOF > "$HOME/.asoundrc"
 pcm.!default {
     type plug
-    slave.pcm "softvol"
+    slave.pcm {
+        type hw
+        card $DAC_CARD
+        device 0
+    }
 }
-
 ctl.!default {
     type hw
-    card sndrpihifiberry
+    card $DAC_CARD
 }
 EOF
 
-sudo tee /etc/asound.conf > /dev/null <<'EOF'
-pcm.dmixer {
-    type dmix
-    ipc_key 1024
-    ipc_perm 0666
-    slave {
-        pcm "hw:CARD=sndrpihifiberry,DEV=0"
-        period_time 0
-        period_size 1024
-        buffer_size 8192
-        rate 44100
-        channels 2
-    }
-    bindings {
-        0 0
-        1 1
-    }
-}
-
-pcm.softvol {
-    type softvol
-    slave.pcm "dmixer"
-    control {
-        name "Master"
-    }
-}
-
+sudo tee /etc/asound.conf > /dev/null <<EOF
 pcm.!default {
     type plug
-    slave.pcm "softvol"
+    slave.pcm {
+        type hw
+        card $DAC_CARD
+        device 0
+    }
 }
-
 ctl.!default {
     type hw
-    card sndrpihifiberry
+    card $DAC_CARD
 }
 EOF
 
