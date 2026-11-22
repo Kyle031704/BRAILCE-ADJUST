@@ -24,8 +24,40 @@ import sys
 import threading
 import time
 from typing import Optional
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+def _find_best_alsa_device() -> Optional[str]:
+    """Find the best hardware playback device, prioritizing I2S DAC (MAX98357A) and USB speakers."""
+    cards_path = Path("/proc/asound/cards")
+    if not cards_path.is_file():
+        return None
+    try:
+        content = cards_path.read_text()
+        dac_card = None
+        usb_card = None
+        for line in content.splitlines():
+            line = line.strip()
+            if line and line[0].isdigit() and "[" in line:
+                num = line.split("[")[0].strip()
+                name = line.split("[")[1].split("]")[0].strip()
+                desc = line.split(":")[-1].strip() if ":" in line else ""
+                card_dir = Path(f"/proc/asound/card{num}")
+                # Verify card has playback subdevice (pcm*p), not capture-only microphone
+                if any(p.is_dir() and p.name.endswith("p") for p in card_dir.glob("pcm*")):
+                    full = (name + " " + desc).lower()
+                    if any(k in full for k in ["dac", "hifiberry", "max98357", "snd_rpi", "i2s"]):
+                        dac_card = num
+                    elif "usb" in full and not any(k in full for k in ["cam", "webcam"]):
+                        usb_card = num
+        chosen = dac_card or usb_card
+        if chosen is not None:
+            return f"plughw:{chosen},0"
+    except Exception:
+        pass
+    return None
 
 
 class AudioDeviceCoordinator:
@@ -110,8 +142,10 @@ class AudioDeviceCoordinator:
             with cls._lock:
                 proc = None
                 try:
+                    best_dev = _find_best_alsa_device()
+                    cmd = ["aplay", "-D", best_dev, "-q", wav_path] if best_dev else ["aplay", "-q", wav_path]
                     proc = subprocess.Popen(
-                        ["aplay", "-q", wav_path],
+                        cmd,
                         stdin=subprocess.DEVNULL,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
