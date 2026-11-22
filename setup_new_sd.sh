@@ -37,8 +37,6 @@ sudo apt-get install -y \
     libasound2-dev \
     libportaudio2 \
     libgl1 \
-    libglib2.0-0 \
-    libatlas-base-dev \
     v4l-utils \
     curl
 
