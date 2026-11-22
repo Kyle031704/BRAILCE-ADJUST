@@ -46,6 +46,9 @@ from brailce.speech.normalizer import (
 
 logger = logging.getLogger(__name__)
 
+# One-time console warning flag for missing piper binary/model
+_piper_missing_warned = False
+
 # Single fixed VITS parameter set for ALL English output (characters, words, sentences, intros).
 # Option 1 (carrier-sentence slicing "Please say: <word>." + brailce/audio/words_en/ cache) is used
 # rather than Option 2 ([[ phonemes ]] overrides) because it generalizes to arbitrary vocabulary
@@ -218,6 +221,35 @@ class PiperEngine(SpeechEngine):
         except Exception as exc:
             logger.debug("espeak fallback error: %s", exc)
 
+    def _warn_piper_missing(self) -> None:
+        """
+        Loud WARNING naming the missing piper piece before any espeak fallback.
+        Logged on every fallback; printed to the console once per process.
+        """
+        problems = []
+        if not (self._binary and os.path.isfile(self._binary) and os.path.getsize(self._binary) > 1000):
+            problems.append(
+                "piper binary (searched PATH, ~/piper/piper/piper, ~/piper/piper, "
+                "/usr/local/bin/piper, /usr/bin/piper; found: {!r})".format(self._binary)
+            )
+        if not (self._model and os.path.isfile(self._model) and os.path.getsize(self._model) > 1000000):
+            problems.append(
+                "Piper voice model .onnx (searched ~/piper, ~/piper/piper, ~/.local/share/piper, "
+                "/usr/local/share/piper; found: {!r})".format(self._model)
+            )
+        msg = "Piper TTS unavailable: missing " + " and ".join(problems) + (
+            " - falling back to espeak (robotic voice). Install Piper for natural speech."
+        )
+        logger.warning(msg)
+        global _piper_missing_warned
+        if not _piper_missing_warned:
+            _piper_missing_warned = True
+            try:
+                if sys.stdout is not None:
+                    print("[WARNING] " + msg, flush=True)
+            except Exception:
+                pass
+
     def set_voice(self, voice: str) -> None:
         if os.path.exists(voice):
             self._model = voice
@@ -339,7 +371,7 @@ class PiperEngine(SpeechEngine):
             sil = sentence_silence or "0.55"
         else:
             synth_input = clean
-            sil = sentence_silence or "0.20"
+            sil = sentence_silence or "0.35"
 
         for attempt in range(3):
             p_piper = None
@@ -476,7 +508,7 @@ class PiperEngine(SpeechEngine):
                 return
 
         if not self.is_available():
-            logger.warning("Piper not available, falling back to espeak: %s", text)
+            self._warn_piper_missing()
             self._fallback_speak(speech_text)
             return
 
@@ -506,6 +538,7 @@ class PiperEngine(SpeechEngine):
                 if synth_ok:
                     AudioDeviceCoordinator.play_wav_file(tmp_path, owner="piper", timeout=30.0)
                 else:
+                    logger.warning("Piper synthesis failed after 3 attempts, falling back to espeak for: %s", text)
                     self._fallback_speak(speech_text)
         finally:
             with self._lock:

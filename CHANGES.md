@@ -226,3 +226,23 @@ Two separate folder lineages (`BRAILCE ADJUST` and `BRAILCE TYPING AND AI ONLY`)
   - *Fix:* Lowered confidence threshold to 0.42; relaxed sparse-lines gate to only trigger on >=5 lines with <1.0 cell/line.
   - *Files:* `brailce/vision/obr_engine.py`, `brailce/modes/scanner_mode.py`, `brailce/config/defaults.py`, `config.json`.
   - *Verified:* Real Braille test images pass with confidence 0.507-0.638, decoded "HAD" successfully. Needs Pi check: Y. Needs PC re-render: N.
+
+
+---
+
+### Section D — Restored Reference 22050 Mono Audio Pipeline & Speech Settings (JOB 2, 2026-11-23)
+
+#### WHY IT REGRESSED
+The audio sounded harsh ("basag"): `tools/master_all_audio_44k_stereo.py` (commit 474570b) converted the whole WAV bank to 44.1 kHz stereo peak-20000, then `audio_device.py` grew a runtime gain stage that rewrote every WAV to a temp file — 22050->44100 via `np.repeat` (buzzy duplication), tanh limiter, software volume/gain math (`set_gain_db`/`_volume_pct`/`_gain_cache`). Live synthesis was also re-gained at playback and Piper `sentence_silence` had drifted to 0.20.
+
+#### FIXES
+- **`brailce/speech/audio_device.py`:** restored reference-simple playback `aplay -q <file.wav>` — default device first, ONE `plughw:<card>,0` retry, process registration/interrupt machinery kept. Removed ALL gain staging: `np.repeat` upsampling, tanh limiter, temp WAV rewriting, stereo conversion, `set_gain_db`/`_apply_output_gain`/`_gain_cache`/`_volume_pct`. The ORIGINAL file path goes to aplay untouched; `set_volume(pct)` -> `amixer sset Master <pct>% unmute` is the single volume control.
+- **`brailce/speech/service.py`:** removed `output_gain_db` read and `set_gain_db()` call; restored reference fallback defaults (filipino_pitch_semitones 3.5, word/comma/sentence/char gaps 30/220/380/200).
+- **`brailce/speech/piper_engine.py`:** `sentence_silence` 0.20 -> 0.35 (carrier stays 0.55); missing piper binary/model now emits a loud named WARNING (console print once per process) before any espeak fallback.
+- **WAV bank -> 22050 Hz mono 16-bit:** new `tools/convert_bank_to_22050_mono.py` (stereo->mono mean, `scipy.signal.resample_poly` only, `normalize_loudness_pcm` levels, bank-median RMS equalization) converted all 853 files. Old 44.1 kHz stereo bank backed up to `C:\Users\MARK\Downloads\_BRAILCE-ADJUST_audio_backup_44k_stereo\`.
+- **`tools/master_all_audio_44k_stereo.py` deleted** (no callers existed in scripts/docs).
+- **Config/defaults speech -> reference:** volume 100, `filipino_char_gap_ms` 200 (added `char_gap_ms` 800 key removed), `filipino_pitch_semitones` 3.5, `filipino_word_gap_ms` 30, comma/sentence pauses 220/380, `filipino_rate` "-5%"; `output_gain_db` removed from config.json AND defaults.py. English voice keys (Piper lessac/amy model order) untouched.
+- **New guards:** `tools/verify_playback_chain.py` (numpy+wave bank audit: 22050/mono/16-bit, active RMS 3500-5000, peak <= 30000, no clipped samples, zero `np.repeat` in brailce/speech) and `brailce/tests/test_playback_chain.py` (aplay gets the ORIGINAL path, no temp file created/read, one plughw retry, source scan, sample format checks). `brailce/tests/english_audio_manifest.sha256` and the frozen English-characters hash in `test_filipino_tts_v2.py` regenerated for the restored format.
+
+#### VERIFIED
+`tools/verify_playback_chain.py` passes clean (853 WAVs); `tools/audit_audio.py` PASS both banks; pytest 537 passed / 7 failed — all 7 remaining failures pre-existed the job (AI/Ollama query, Filipino LCD/speech parity, enye keystroke WAV never present in any bank version, OBR synthetic accuracy) and are outside JOB 2 scope. The 7 previously failing audio-bank format/hash/level audits now pass.

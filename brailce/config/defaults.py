@@ -67,9 +67,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "voice": "en",
         "rate": 165,
         "pitch": 52,
-        "volume": 85,
-        "output_gain_db": 0.0,
-        "filipino_pitch_semitones": 0.0,
+        "volume": 100,
+        "filipino_pitch_semitones": 3.5,
         "word_gap_ms": 5,
         "speak_each_character": True,
         "speak_words": True,
@@ -85,14 +84,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # Filipino synthesis rate setting for edge-tts build
         "filipino_rate": "-5%",
         # Inter-word gap inside a clause for offline concatenation (ms)
-        "filipino_word_gap_ms": 10,
+        "filipino_word_gap_ms": 30,
         # Clause pause at comma / colon / semicolon (ms)
         "filipino_comma_pause_ms": 220,
         # Sentence pause at period / exclamation / question mark (ms)
         "filipino_sentence_pause_ms": 380,
         # Inter-character pause during spell-out in Scanner and Free Input (ms)
-        "char_gap_ms": 800,
-        "filipino_char_gap_ms": 800,
+        "filipino_char_gap_ms": 200,
         # Maximum speech queue size before dropping events
         "max_queue_size": 50,
     },

@@ -1,6 +1,6 @@
-"""
+﻿"""
 Brailce Audio Device Coordinator
-================================
+===============================
 
 Coordinates exclusive access to the I2S DAC (MAX98357A) and ALSA sound card.
 Ensures seamless, clean handoff between speech playback (Piper Neural TTS,
@@ -12,25 +12,22 @@ Safe Playback Rules:
 2. Only one playback process runs at any time.
 3. Playback uses the standard mode-introduction pipeline: aplay -q <file.wav>.
    Never stream raw bytes or piped WAV data to aplay via stdin.
-4. Allow hardware DMA clock to settle after interrupting any active process.
+4. No file is ever modified before playback — the ORIGINAL wav path is
+   handed to aplay. No resampling, upsampling, gain staging, limiting, or
+   temp WAV rewriting happens here.
+5. Allow hardware DMA clock to settle after interrupting any active process.
 """
 
 from __future__ import annotations
 
-import atexit
 import logging
 import os
 import subprocess
 import sys
-import tempfile
 import threading
 import time
-import wave
-from collections import OrderedDict
 from typing import Optional
 from pathlib import Path
-
-import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -74,37 +71,20 @@ class AudioDeviceCoordinator:
     Playback and volume policy:
     - Non-Windows playback opens the ALSA *default* device first
       (``aplay -q <file.wav>``) so the user's ~/.asoundrc chain applies
-      (plug -> softvol "Master" -> dmixer -> hw); on nonzero exit OR timeout it
-      falls back to one ``plughw:<N>,0`` attempt on the best hardware card.
-      After 2 consecutive default failures playback is sticky on plughw and
-      the default is not re-probed for 60 s.
-    - ``set_gain_db()`` applies 0..24 dB output gain to 16-bit WAVs through a
-      soft-knee limiter (knee starting at 0.60 of full scale, 0.945 ceiling
-      held by a never-engaged guard cap), so quiet WAV banks sound full
-      without hard digital clipping; gain-staged temp WAVs are memoized
-      (last 32) and removed at process exit.
-    - ``set_volume()`` drives the ALSA softvol control "Master" (defined in
-      ~/.asoundrc) via best-effort ``amixer sset`` in a daemon thread; the
-      stored percentage is the real volume channel, combined into the output
-      gain (pct=100 -> unchanged, pct=1 -> -40 dB floor).
+      (plug -> softvol "Master" -> dmixer -> hw); on nonzero exit, timeout,
+      or launch failure it retries exactly once on the best hardware card
+      (``plughw:<N>,0``).
+    - The WAV file is played whole and unmodified: the ORIGINAL path is
+      passed to aplay. No temp files, no resampling, no gain stage.
+    - ``set_volume()`` is the single volume control: it drives the ALSA
+      softvol control "Master" via best-effort ``amixer sset`` in a daemon
+      thread. Nothing else touches volume.
     - Never stream raw bytes or piped WAV data to aplay via stdin.
     """
 
     _lock = threading.RLock()
     _active_process: Optional[subprocess.Popen] = None
     _active_owner: Optional[str] = None
-    _gain_db: float = 0.0   # class attribute
-    _volume_pct: int = 100
-    _default_failures: int = 0
-    _default_retry_at: float = 0.0
-    _gain_cache: "OrderedDict[tuple, str]" = OrderedDict()
-
-    @classmethod
-    def set_gain_db(cls, gain_db: float) -> None:
-        try:
-            cls._gain_db = max(0.0, min(24.0, float(gain_db)))
-        except (TypeError, ValueError):
-            cls._gain_db = 0.0
 
     @classmethod
     def set_volume(cls, volume: int) -> None:
@@ -112,9 +92,7 @@ class AudioDeviceCoordinator:
         try:
             pct = max(0, min(100, int(volume)))
         except (TypeError, ValueError):
-            return  # unparseable input: keep the last stored percentage
-        # Store FIRST so the percentage is the real channel even without amixer
-        cls._volume_pct = pct
+            return
         try:
             def _fire_amixer() -> None:
                 try:
@@ -178,102 +156,36 @@ class AudioDeviceCoordinator:
                         time.sleep(0.05)
 
     @classmethod
-    def _apply_output_gain(cls, wav_path: str) -> tuple[str, bool]:
-        """
-        Apply the combined output gain (set_gain_db + stored volume pct) to a
-        16-bit WAV through a soft-knee limiter: the knee starts at 0.60 of
-        full scale and tanh-compresses toward the 0.945 ceiling; a hard cap
-        at the ceiling is a never-engaged guard. Results are memoized in
-        cls._gain_cache (path/mtime/gain/pct key, last 32 kept, evicted and
-        atexit temp files removed best-effort).
-
-        Returns (path_to_play, is_temp): a memoized or fresh temp WAV with
-        gain applied, or (wav_path, False) when the combined gain is a no-op
-        (|g| < 0.05 dB), the file is missing / not 16-bit PCM, or anything
-        fails — gain staging must never block speech playback.
-        """
-        tmp_path: Optional[str] = None
+    def _run_aplay(cls, cmd: list, owner: str, timeout: float) -> bool:
+        """Run one aplay invocation, registering the process. Returns True on clean exit 0."""
+        proc = None
         try:
-            # Combined real volume channel: static gain + softvol percentage
-            gain_db = cls._gain_db + float(np.log10(max(cls._volume_pct, 1) / 100.0)) * 20.0
-            if not wav_path or not os.path.isfile(wav_path):
-                return (wav_path, False)
-            key = (
-                os.path.abspath(wav_path),
-                os.path.getmtime(wav_path),
-                round(cls._gain_db, 3),
-                cls._volume_pct,
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
-            cached = cls._gain_cache.get(key)
-            if cached is not None and os.path.isfile(cached):
-                return (cached, True)
-            with wave.open(wav_path, "rb") as wf:
-                sampwidth = wf.getsampwidth()
-                if sampwidth != 2:
-                    return (wav_path, False)
-                nchannels = wf.getnchannels()
-                framerate = wf.getframerate()
-                raw = wf.readframes(wf.getnframes())
-
-            needs_format_fix = (framerate != 44100 or nchannels != 2)
-            if abs(gain_db) < 0.05 and not needs_format_fix:
-                return (wav_path, False)
-
-            samples = np.frombuffer(raw, dtype=np.int16)
-            if nchannels == 2:
-                samples = samples.reshape(-1, 2)
-                mono = samples.mean(axis=1).astype(np.float64) / 32768.0
-            else:
-                mono = samples.astype(np.float64) / 32768.0
-
-            if framerate != 44100:
-                if framerate == 22050:
-                    mono = np.repeat(mono, 2)
-                else:
-                    target_len = int(len(mono) * 44100.0 / framerate)
-                    mono = np.interp(np.linspace(0, len(mono), target_len, endpoint=False), np.arange(len(mono)), mono)
-
-            out = mono * (10.0 ** (gain_db / 20.0))
-            if gain_db > 0.05:
-                # Limiter is ONLY engaged when positive software boost is applied and exceeds safe headroom
-                KNEE_START = 0.88
-                ceiling = 0.95
-                over = np.abs(out) > KNEE_START
-                if over.any():
-                    oa = np.abs(out[over])
-                    out[over] = np.sign(out[over]) * (
-                        KNEE_START + (ceiling - KNEE_START) * np.tanh((oa - KNEE_START) / (ceiling - KNEE_START))
-                    )
-                out = np.sign(out) * np.minimum(np.abs(out), ceiling)
-            else:
-                out = np.clip(out, -1.0, 1.0)
-
-            out_int16 = np.clip(out * 32767.0, -32767.0, 32767.0).astype(np.int16)
-            stereo = np.column_stack((out_int16, out_int16))
-
-            fd, tmp_path = tempfile.mkstemp(suffix=".wav", prefix="brailce_gain_")
-            os.close(fd)
-            with wave.open(tmp_path, "wb") as wf_out:
-                wf_out.setnchannels(2)
-                wf_out.setsampwidth(2)
-                wf_out.setframerate(44100)
-                wf_out.writeframes(stereo.tobytes())
-            cls._gain_cache[key] = tmp_path
-            while len(cls._gain_cache) > 32:
+            cls.register_process(proc, owner)
+            proc.wait(timeout=timeout)
+            if proc.returncode == 0:
+                time.sleep(0.12)  # Allow ALSA hardware ring buffer to completely drain to DAC
+                return True
+            logger.debug("aplay exited %s for: %s", proc.returncode, cmd[-1])
+            return False
+        except subprocess.TimeoutExpired:
+            if proc and proc.poll() is None:
                 try:
-                    _, evicted = cls._gain_cache.popitem(last=False)
-                    os.remove(evicted)
+                    proc.kill()
                 except Exception:
                     pass
-            return (tmp_path, True)
+            logger.debug("Playback timeout for: %s", cmd[-1])
+            return False
         except Exception as exc:
-            if tmp_path:
-                try:
-                    os.remove(tmp_path)
-                except Exception:
-                    pass
-            logger.debug("Output gain stage failed for %s: %s", wav_path, exc)
-            return (wav_path, False)
+            logger.debug("aplay failed for %s: %s", cmd[-1], exc)
+            return False
+        finally:
+            cls.unregister_process(proc)
 
     @classmethod
     def play_wav_file(
@@ -283,111 +195,27 @@ class AudioDeviceCoordinator:
         timeout: float = 15.0,
     ) -> bool:
         """
-        Safely play a WAV file via aplay on the ALSA *default* device
-        (aplay -q <wav_path>), which honors the user's ~/.asoundrc chain
-        (plug -> softvol "Master" -> dmixer -> hw). On nonzero exit OR timeout
-        it retries once on the best hardware card (plughw:<N>,0); after 2
-        consecutive default failures playback goes straight to plughw and
-        the default is not re-probed for 60 s. Output gain set via
-        set_gain_db()/set_volume() is baked into a memoized temp WAV through
-        a soft-knee limiter (kept for reuse, removed at process exit).
-        
+        Safely play a WAV file using the exact standard mode-introduction pipeline:
+            aplay -q <wav_path>
+
         Acquires exclusive device lock, registers the process, waits for completion,
-        and unregisters safely. Never streams raw bytes or uses stdin.
+        and unregisters safely. The file is played whole and unmodified — the
+        ORIGINAL path is passed to aplay. On failure of the ALSA default device
+        (nonzero exit, timeout, or launch error) it retries exactly once on the
+        best hardware card (plughw:<N>,0). Never streams raw bytes or uses stdin.
         """
         if not wav_path or not os.path.isfile(wav_path):
             logger.debug("Audio file does not exist: %r", wav_path)
             return False
 
         if sys.platform != "win32":
-            play_path, _is_temp = cls._apply_output_gain(wav_path)  # memoized temp: reused, never deleted here
             with cls._lock:
-                proc = None
-                try:
-                    start = time.monotonic()
-                    best_dev = _find_best_alsa_device()
-                    # Sticky plughw: after 2 consecutive default failures, skip the
-                    # default device until it is re-probed (at most once per 60 s).
-                    use_default = best_dev is None or not (
-                        cls._default_failures >= 2 and time.monotonic() < cls._default_retry_at
-                    )
-                    if use_default:
-                        try:
-                            proc = subprocess.Popen(
-                                ["aplay", "-q", play_path],
-                                stdin=subprocess.DEVNULL,
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL,
-                            )
-                            cls.register_process(proc, owner)
-                            proc.wait(timeout=timeout)
-                            if proc.returncode == 0:
-                                cls._default_failures = 0
-                                time.sleep(0.02)  # Fast buffer drain for snappy word/sentence response
-                                return True
-                        except subprocess.TimeoutExpired:
-                            if proc and proc.poll() is None:
-                                try:
-                                    proc.kill()
-                                except Exception:
-                                    pass
-                            cls._default_failures += 1
-                            if cls._default_failures >= 2:
-                                cls._default_retry_at = time.monotonic() + 60.0
-                        except Exception as exc:
-                            logger.debug("aplay (default device) failed for %s: %s", wav_path, exc)
-                        else:
-                            # Attempt 1 exited nonzero: broken default device or .asoundrc
-                            cls._default_failures += 1
-                            if cls._default_failures >= 2:
-                                cls._default_retry_at = time.monotonic() + 60.0
-                    if best_dev:
-                        try:
-                            proc = subprocess.Popen(
-                                ["aplay", "-D", best_dev, "-q", play_path],
-                                stdin=subprocess.DEVNULL,
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL,
-                            )
-                            cls.register_process(proc, owner)
-                            proc.wait(timeout=max(2.0, timeout - (time.monotonic() - start)))
-                            if proc.returncode == 0:
-                                time.sleep(0.02)  # Fast buffer drain for snappy word/sentence response
-                                return True
-                        except subprocess.TimeoutExpired:
-                            if proc and proc.poll() is None:
-                                try:
-                                    proc.kill()
-                                except Exception:
-                                    pass
-                            logger.debug("Playback timeout for: %s", wav_path)
-                            return False
-                        except Exception as exc:
-                            logger.debug("aplay (%s) failed for %s: %s", best_dev, wav_path, exc)
-                finally:
-                    cls.unregister_process(proc)
-
-                # Secondary modern Linux audio backends (PipeWire / PulseAudio on Debian/Pi OS)
-                import shutil
-                for alt_bin in ["paplay", "pw-play"]:
-                    alt_path = shutil.which(alt_bin)
-                    if alt_path:
-                        proc2 = None
-                        try:
-                            proc2 = subprocess.Popen(
-                                [alt_path, wav_path],
-                                stdin=subprocess.DEVNULL,
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL,
-                            )
-                            cls.register_process(proc2, owner)
-                            proc2.wait(timeout=timeout)
-                            if proc2.returncode == 0:
-                                return True
-                        except Exception:
-                            pass
-                        finally:
-                            cls.unregister_process(proc2)
+                if cls._run_aplay(["aplay", "-q", wav_path], owner, timeout):
+                    return True
+                best_dev = _find_best_alsa_device()
+                if best_dev:
+                    if cls._run_aplay(["aplay", "-D", best_dev, "-q", wav_path], owner, timeout):
+                        return True
                 return False
         else:
             # Windows fallback
@@ -398,19 +226,3 @@ class AudioDeviceCoordinator:
             except Exception as exc:
                 logger.debug("winsound playback failed: %s", exc)
                 return False
-
-
-def _cleanup_gain_cache() -> None:
-    """Best-effort removal of memoized gain temp WAVs at interpreter exit."""
-    try:
-        for tmp_path in list(AudioDeviceCoordinator._gain_cache.values()):
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
-        AudioDeviceCoordinator._gain_cache.clear()
-    except Exception:
-        pass
-
-
-atexit.register(_cleanup_gain_cache)
