@@ -411,6 +411,7 @@ class ScannerMode(BaseMode):
                     result = result_center
 
             if not result.get("readable") or not str(result.get("text", "")).strip():
+                logger.warning("Scanner mode: scan unreadable, result=%r", result)
                 reason = str(result.get("reason", "no_braille"))
                 key = self._REASON_TO_STRING_KEY.get(reason, "SCANNER_NO_BRAILLE")
                 msg = get_string(key, lang)

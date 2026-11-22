@@ -1,8 +1,8 @@
 {
     "system": {
-        "simulation_mode": true,
-        "debug": false,
-        "log_level": "INFO"
+        "simulation_mode": false,
+        "debug": true,
+        "log_level": "DEBUG"
     },
 
     "input": {
@@ -85,11 +85,11 @@
     },
     
     "vision": {
-        "driver": "auto",
+        "driver": "usb",
         "usb_device": 0,
         "autofocus": true,
         "model_path": "brailce/vision/yolov8_braille.pt",
-        "confidence_threshold": 0.60,
+        "confidence_threshold": 0.42,
         "iou_threshold": 0.45,
         "test_image_path": ""
     }

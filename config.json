@@ -1,6 +1,11 @@
 {
+  "system": {
+    "simulation_mode": false,
+    "debug": true,
+    "log_level": "DEBUG"
+  },
   "vision": {
-    "driver": "auto",
+    "driver": "usb",
     "confidence_threshold": 0.42
   }
 }
