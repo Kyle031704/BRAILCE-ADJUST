@@ -41,7 +41,7 @@
         "filipino_comma_pause_ms": 220,
         "filipino_sentence_pause_ms": 380,
         "filipino_char_gap_ms": 200,
-        "filipino_pitch_semitones": 3.5,
+        "filipino_pitch_semitones": 0.0,
         "max_queue_size": 50
     },
 

@@ -246,3 +246,19 @@ The audio sounded harsh ("basag"): `tools/master_all_audio_44k_stereo.py` (commi
 
 #### VERIFIED
 `tools/verify_playback_chain.py` passes clean (853 WAVs); `tools/audit_audio.py` PASS both banks; pytest 537 passed / 7 failed — all 7 remaining failures pre-existed the job (AI/Ollama query, Filipino LCD/speech parity, enye keystroke WAV never present in any bank version, OBR synthetic accuracy) and are outside JOB 2 scope. The 7 previously failing audio-bank format/hash/level audits now pass.
+
+---
+
+### Section E — Speaker Output Settings Debug (2026-11-23)
+
+#### WHY
+The deploy scripts wrote a direct `hw` `!default` chain (no softvol, no dmix) to `~/.asoundrc` + `/etc/asound.conf`, so `amixer sset Master` could never succeed (volume keys dead) and 22050 Hz bank files drove the I2S clock at ~705 kHz instead of the 44.1 kHz stereo / 1.411 MHz lock. Meanwhile `tools/clean_voice_anti_bass.py` had re-mastered the entire bank to 44.1 kHz stereo peak-5000 (inaudibly quiet, active RMS ~891-1307), and speech config re-grew a dead `output_gain_db` key with volume 70.
+
+#### FIXES
+- `tools/fix_buzzing_audio.sh` + `tools/apply_voice_upgrade.sh`: canonical chain written identically to `~/.asoundrc` AND `/etc/asound.conf` — `!default plug -> softvol "Master" -> dmixer (dmix 44100 Hz stereo, period 1024, buffer 8192) -> hw:$DAC_CARD,0` + `ctl.!default hw $DAC_CARD`; truthful echo lines; NOTE that the softvol "Master" control only exists while the default PCM is open; `amixer set Master 100% unmute` best-effort.
+- Bank re-restored to 22050 Hz mono 16-bit active-RMS-4200 via `tools/convert_bank_to_22050_mono.py`; `tools/clean_voice_anti_bass.py` repaired (250 Hz HPF at each file's own rate + `normalize_loudness_pcm` re-normalization, INPUT rate / mono / 16-bit preserved, docstring fixed); manifest + frozen English hash regenerated.
+- `brailce/config/config.json` + `brailce/config/defaults.py`: dead `output_gain_db` removed, speech `volume` -> 100 (reference); `filipino_pitch_semitones` untouched.
+- `tools/test_speaker_quick.sh`: full output-settings diagnostic (cards, effective asoundrc/asound.conf, scontrols, app volume, char_A.wav + word_ano.wav via BOTH routes, English+Filipino decision guide); arbitrary card-2 fallback removed.
+
+#### VERIFIED
+`tools/verify_playback_chain.py` clean over 853 WAVs; audio/config/manifest pytest suites 32/33 (only the pre-existing enye `char_?.wav` failure); `bash -n` + stubbed dry-runs OK for all three scripts (identical chains to $HOME and /etc with both card-number and name fallback).

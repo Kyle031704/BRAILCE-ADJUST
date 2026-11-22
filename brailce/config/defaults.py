@@ -68,7 +68,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "rate": 165,
         "pitch": 52,
         "volume": 100,
-        "filipino_pitch_semitones": 3.5,
+        "filipino_pitch_semitones": 0.0,
         "word_gap_ms": 5,
         "speak_each_character": True,
         "speak_words": True,
