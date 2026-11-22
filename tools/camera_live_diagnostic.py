@@ -12,6 +12,7 @@ Usage:
 import os
 import sys
 import time
+import json
 import argparse
 import logging
 from pathlib import Path
@@ -23,7 +24,6 @@ import cv2
 import numpy as np
 from brailce.vision.camera import UsbWebcamDevice, PiCameraDevice, compute_sharpness
 from brailce.vision.obr_engine import OBREngine
-from brailce.config.manager import ConfigManager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("CameraDiag")
@@ -99,16 +99,27 @@ def run_single_diagnostic(cam, obr, save_path="debug_scan/live_test.jpg"):
     return readable
 
 
+def get_cam_device_index():
+    try:
+        from brailce.config.loader import ConfigLoader
+        cfg = ConfigLoader.load("brailce/config/config.json")
+        return cfg.get("vision", "usb_device", default=0)
+    except Exception:
+        pass
+    try:
+        with open("config.json", "r") as f:
+            return json.load(f).get("vision", {}).get("usb_device", 0)
+    except Exception:
+        return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description="Brailce Live Camera Diagnostic")
     parser.add_argument("--loop", action="store_true", help="Run continuous monitoring loop")
     parser.add_argument("--interval", type=float, default=2.0, help="Interval between scans in loop mode")
     args = parser.parse_args()
 
-    cfg = ConfigManager()
-    vision_cfg = cfg.get("vision", default={})
-    cam_index = vision_cfg.get("usb_device", vision_cfg.get("camera_index", 0))
-
+    cam_index = get_cam_device_index()
     print(f"Initializing UsbWebcamDevice (device {cam_index})...")
     cam = None
     try:
