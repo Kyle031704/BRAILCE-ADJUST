@@ -533,11 +533,18 @@ class SpeechService(SpeechEngine):
             volume=volume,
             max_queue_size=max_queue,
         )
+        if not piper.is_available():
+            from brailce.speech.espeak_engine import EspeakEngine
+            logger.info("PiperEngine not found — falling back to EspeakEngine for English TTS.")
+            espeak = EspeakEngine(voice=voice, rate=rate, pitch=pitch, volume=volume, max_queue_size=max_queue)
+            main_engine = espeak
+        else:
+            main_engine = piper
 
         return cls(
-            character_engine=piper,
-            text_engine=piper,
-            piper_engine=piper,
+            character_engine=main_engine,
+            text_engine=main_engine,
+            piper_engine=piper if piper.is_available() else None,
             behavior=behavior,
             voice=voice,
             rate=rate,

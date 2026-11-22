@@ -31,6 +31,7 @@ sudo apt-get install -y \
     python3-venv \
     python3-pip \
     python3-dev \
+    python3-lgpio \
     git \
     espeak-ng \
     alsa-utils \
@@ -40,9 +41,11 @@ sudo apt-get install -y \
     v4l-utils \
     curl
 
-# 2. Add user to hardware groups
+# 2. Add user to hardware groups & enable SPI/I2C
 echo -e "${YELLOW}[2/6] Configuring hardware permissions (video, audio, input, spi, i2c)...${NC}"
 sudo usermod -aG video,audio,input,spi,i2c "$USER" 2>/dev/null || true
+sudo raspi-config nonint do_spi 0 2>/dev/null || true
+sudo raspi-config nonint do_i2c 0 2>/dev/null || true
 
 # 3. Create and activate Python Virtual Environment
 echo -e "${YELLOW}[3/6] Setting up Python virtual environment (~/venv)...${NC}"
@@ -52,9 +55,24 @@ fi
 source "$HOME/venv/bin/activate"
 
 # 4. Install Python dependencies
-echo -e "${YELLOW}[4/6] Installing Python packages (OpenCV, Piper, Sherpa, etc.)...${NC}"
+echo -e "${YELLOW}[4/6] Installing Python packages (OpenCV, Piper, Sherpa, Display)...${NC}"
 pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
+pip install spidev luma.lcd luma.core 2>/dev/null || true
+
+# 4.1. Setup Piper Neural TTS binary & voice model
+echo -e "${YELLOW}Setting up Piper Neural TTS (en_US-ryan-medium)...${NC}"
+mkdir -p "$HOME/piper"
+if [ ! -f "$HOME/piper/piper" ]; then
+    cd "$HOME/piper"
+    curl -sL https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_aarch64.tar.gz | tar -xz --strip-components=1 2>/dev/null || true
+    chmod +x "$HOME/piper/piper" 2>/dev/null || true
+    cd - >/dev/null
+fi
+if [ ! -f "$HOME/piper/en_US-ryan-medium.onnx" ]; then
+    curl -sL -o "$HOME/piper/en_US-ryan-medium.onnx" https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx || true
+    curl -sL -o "$HOME/piper/en_US-ryan-medium.onnx.json" https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json || true
+fi
 
 # 5. Install and setup Ollama with Liquid AI model
 echo -e "${YELLOW}[5/6] Setting up local Ollama AI server and LFM model...${NC}"
