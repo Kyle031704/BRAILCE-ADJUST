@@ -313,6 +313,50 @@ class SpeechService(SpeechEngine):
 
         self.speak_text(text, interrupt=interrupt, allow_ai_cache=allow_ai_cache)
 
+    def _speak_neural_female(self, text: str, interrupt: bool = False) -> bool:
+        """Synthesize and play dynamic text with studio-quality female Blessica voice."""
+        clean = text.strip()
+        if not clean:
+            return True
+        cache_dir = os.path.join(os.path.dirname(__file__), "..", "audio", "cache_tts")
+        os.makedirs(cache_dir, exist_ok=True)
+        import hashlib
+        slug = hashlib.md5(clean.encode("utf-8")).hexdigest()
+        cached_wav = os.path.join(cache_dir, f"tts_{slug}.wav")
+
+        from brailce.speech.audio_device import AudioDeviceCoordinator
+        if os.path.isfile(cached_wav) and os.path.getsize(cached_wav) > 1000:
+            if interrupt:
+                self.stop()
+            return AudioDeviceCoordinator.play_wav_file(cached_wav, owner="neural_female", timeout=30.0)
+
+        # Synthesize via edge-tts (fil-PH-BlessicaNeural) with high volume gain
+        try:
+            import edge_tts
+            import asyncio
+            async def _synth():
+                tmp_mp3 = f"/tmp/female_{slug}.mp3"
+                comm = edge_tts.Communicate(clean, "fil-PH-BlessicaNeural", rate="+3%", pitch="+1Hz")
+                await comm.save(tmp_mp3)
+                subprocess.run(
+                    ["ffmpeg", "-y", "-i", tmp_mp3, "-ar", "22050", "-ac", "1", "-filter:a", "volume=2.2", cached_wav],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=True,
+                    timeout=15,
+                )
+                if os.path.exists(tmp_mp3):
+                    os.remove(tmp_mp3)
+
+            asyncio.run(_synth())
+            if os.path.isfile(cached_wav):
+                if interrupt:
+                    self.stop()
+                return AudioDeviceCoordinator.play_wav_file(cached_wav, owner="neural_female", timeout=30.0)
+        except Exception:
+            pass
+        return False
+
     def speak_text(
         self,
         text: str,
@@ -329,6 +373,11 @@ class SpeechService(SpeechEngine):
         clean = text.strip().rstrip(".")
         if len(clean) == 1:
             self.speak_character(clean)
+            return
+
+        # Attempt studio-quality neural female synthesis first (both English & Filipino)
+        if self._speak_neural_female(text, interrupt=interrupt):
+            self._record_utterance("text", text, {"interrupt": interrupt, "engine": "blessica_neural"})
             return
 
         if self._language == "fil":
@@ -424,11 +473,21 @@ class SpeechService(SpeechEngine):
                 self.stop()
             self._record_utterance("text", intro, {"mode": str(mode), "lang": "fil"})
             if mode_wav and os.path.isfile(mode_wav):
-                self.filipino_engine.enqueue_wav(mode_wav, interrupt=False)
+                from brailce.speech.audio_device import AudioDeviceCoordinator
+                AudioDeviceCoordinator.play_wav_file(mode_wav, owner="mode_intro", timeout=10.0)
             else:
                 self.filipino_engine.enqueue_text(intro, interrupt=False)
         else:
-            self.speak_text(intro, interrupt=interrupt)
+            from brailce.speech.filipino_engine import get_english_mode_path
+            mode_wav = get_english_mode_path(mode)
+            if mode_wav and os.path.isfile(mode_wav):
+                if interrupt:
+                    self.stop()
+                self._record_utterance("text", intro, {"mode": str(mode), "lang": "en"})
+                from brailce.speech.audio_device import AudioDeviceCoordinator
+                AudioDeviceCoordinator.play_wav_file(mode_wav, owner="mode_intro", timeout=10.0)
+            else:
+                self.speak_text(intro, interrupt=interrupt)
         return intro
 
     def speak_language_switch(self, new_lang: str, interrupt: bool = True) -> str:

@@ -104,9 +104,10 @@ def _find_piper_model() -> Optional[str]:
         "/usr/local/share/piper",
     ]
     preferred_names = [
+        "en_US-lessac-medium.onnx",
+        "en_US-amy-medium.onnx",
         "en_US-ryan-medium.onnx",
         "en_US-bryce-medium.onnx",
-        "en_US-lessac-medium.onnx",
         "en_GB-alan-medium.onnx",
     ]
     for d in search_dirs:

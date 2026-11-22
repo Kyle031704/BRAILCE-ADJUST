@@ -242,6 +242,29 @@ def get_filipino_mode_path(mode: Any) -> Optional[str]:
     return None
 
 
+def get_english_mode_path(mode: Any) -> Optional[str]:
+    """Return path to cached English mode announcement WAV if it exists on disk."""
+    mode_name = str(mode).lower()
+    if hasattr(mode, "name"):
+        mode_name = mode.name.lower()
+    mapping = {
+        "free_input": "mode_free_input_en.wav",
+        "math": "mode_math_en.wav",
+        "ai_assistant": "mode_ai_en.wav",
+        "ai": "mode_ai_en.wav",
+        "scanner": "mode_scanner_en.wav",
+    }
+    for key, fname in mapping.items():
+        if key in mode_name:
+            p1 = os.path.join(os.path.dirname(__file__), "..", "audio", "characters", fname)
+            if os.path.isfile(p1):
+                return p1
+            p2 = os.path.join(os.path.dirname(__file__), "..", "audio", "filipino", fname)
+            if os.path.isfile(p2):
+                return p2
+    return None
+
+
 def get_filipino_word_path(word: str) -> Optional[str]:
     """
     Return path to cached Filipino word WAV if it exists on disk.
