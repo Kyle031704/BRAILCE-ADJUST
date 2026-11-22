@@ -177,7 +177,28 @@ class PiperEngine(SpeechEngine):
             self._binary = _find_piper_binary()
         if not self._model:
             self._model = _find_piper_model()
-        return bool(self._binary and os.path.exists(self._binary) and self._model and os.path.exists(self._model))
+        return bool(
+            self._binary
+            and os.path.isfile(self._binary)
+            and os.path.getsize(self._binary) > 1000
+            and self._model
+            and os.path.isfile(self._model)
+            and os.path.getsize(self._model) > 1000000
+        )
+
+    def _fallback_speak(self, text: str) -> None:
+        """Emergency fallback to system espeak-ng when Piper is unavailable."""
+        try:
+            cmd = shutil.which("espeak-ng") or shutil.which("espeak")
+            if cmd:
+                subprocess.run(
+                    [cmd, "-s", str(self._rate), "-a", str(self._volume), text],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                )
+        except Exception as exc:
+            logger.debug("espeak fallback error: %s", exc)
 
     def set_voice(self, voice: str) -> None:
         if os.path.exists(voice):
@@ -437,7 +458,8 @@ class PiperEngine(SpeechEngine):
                 return
 
         if not self.is_available():
-            logger.warning("Piper not available, unable to speak: %s", text)
+            logger.warning("Piper not available, falling back to espeak: %s", text)
+            self._fallback_speak(speech_text)
             return
 
         tmp_fd = None
@@ -465,6 +487,8 @@ class PiperEngine(SpeechEngine):
                 )
                 if synth_ok:
                     AudioDeviceCoordinator.play_wav_file(tmp_path, owner="piper", timeout=30.0)
+                else:
+                    self._fallback_speak(speech_text)
         finally:
             with self._lock:
                 self._current_process = None

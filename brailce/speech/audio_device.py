@@ -118,8 +118,9 @@ class AudioDeviceCoordinator:
                     )
                     cls.register_process(proc, owner)
                     proc.wait(timeout=timeout)
-                    time.sleep(0.12)  # Allow ALSA hardware ring buffer to completely drain to DAC
-                    return proc.returncode == 0
+                    if proc.returncode == 0:
+                        time.sleep(0.12)  # Allow ALSA hardware ring buffer to completely drain to DAC
+                        return True
                 except subprocess.TimeoutExpired:
                     if proc and proc.poll() is None:
                         try:
@@ -130,9 +131,31 @@ class AudioDeviceCoordinator:
                     return False
                 except Exception as exc:
                     logger.debug("aplay failed for %s: %s", wav_path, exc)
-                    return False
                 finally:
                     cls.unregister_process(proc)
+
+                # Secondary modern Linux audio backends (PipeWire / PulseAudio on Debian/Pi OS)
+                import shutil
+                for alt_bin in ["paplay", "pw-play"]:
+                    alt_path = shutil.which(alt_bin)
+                    if alt_path:
+                        proc2 = None
+                        try:
+                            proc2 = subprocess.Popen(
+                                [alt_path, wav_path],
+                                stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                            )
+                            cls.register_process(proc2, owner)
+                            proc2.wait(timeout=timeout)
+                            if proc2.returncode == 0:
+                                return True
+                        except Exception:
+                            pass
+                        finally:
+                            cls.unregister_process(proc2)
+                return False
         else:
             # Windows fallback
             try:
