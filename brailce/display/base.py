@@ -76,6 +76,7 @@ class DisplayDevice(abc.ABC):
         frame: Any,
         status: Optional[str] = None,
         overlays: Optional[List[Dict[str, Any]]] = None,
+        distance_state: Optional[str] = None,
     ) -> None:
         """
         Display a live camera viewfinder/preview frame.

@@ -196,6 +196,7 @@ class ConsoleDisplay(DisplayDevice):
         frame: Any,
         status: Optional[str] = None,
         overlays: Optional[List[Dict[str, Any]]] = None,
+        distance_state: Optional[str] = None,
     ) -> None:
         """Render live camera viewfinder, draw character overlays, and save snapshot."""
         if frame is None:

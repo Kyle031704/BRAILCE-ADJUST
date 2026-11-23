@@ -663,6 +663,7 @@ class ILI9488Display(DisplayDevice):
         frame: Any,
         status: Optional[str] = None,
         overlays: Optional[List[Dict[str, Any]]] = None,
+        distance_state: Optional[str] = None,
     ) -> None:
         """Render camera preview with clean letterboxed framing, decoded cell overlays, and non-blocking frame-skipping."""
         if frame is None:
@@ -749,20 +750,57 @@ class ILI9488Display(DisplayDevice):
 
             draw = ImageDraw.Draw(preview_img)
 
-            # Center Braille Scanning ROI (Task 4)
-            from brailce.vision.obr_engine import SHOW_ROI, ROI_W_FRAC, ROI_H_FRAC
+            # Center Braille Scanning Reticle & Framing Border (Embossed HUD style)
+            from brailce.vision.obr_engine import SHOW_ROI
             if SHOW_ROI:
-                roi_w_disp = int(nw * ROI_W_FRAC)
-                roi_h_disp = int(nh * ROI_H_FRAC)
+                # Centered, optimal framing window for embossed Braille (74% width, 48% height)
+                roi_w_disp = int(nw * 0.74)
+                roi_h_disp = int(nh * 0.48)
                 rx0 = ox + int((nw - roi_w_disp) // 2)
                 ry0 = oy + int((nh - roi_h_disp) // 2)
                 rx1 = rx0 + roi_w_disp
                 ry1 = ry0 + roi_h_disp
-                draw.rectangle([(rx0, ry0), (rx1, ry1)], outline=(16, 185, 129), width=1)
-                # Center crosshair
-                cx, cy = int(self._width // 2), int((ry0 + ry1) // 2)
-                draw.line([(cx - 12, cy), (cx + 12, cy)], fill=(16, 185, 129), width=1)
-                draw.line([(cx, cy - 12), (cx, cy + 12)], fill=(16, 185, 129), width=1)
+
+                # Dynamic color feedback based on distance state
+                if distance_state == "ok":
+                    corner_color = (74, 222, 128)     # Bright Vibrant Green
+                    reticle_color = (34, 197, 94)
+                    dim_border = (20, 83, 45)         # Dark Green border
+                elif distance_state in ("too_close", "too_far"):
+                    corner_color = (251, 191, 36)     # Bright Warning Yellow
+                    reticle_color = (245, 158, 11)
+                    dim_border = (120, 53, 15)        # Dark Amber border
+                else:
+                    corner_color = (56, 189, 248)     # Light Cyan
+                    reticle_color = (14, 165, 233)
+                    dim_border = (12, 74, 110)        # Dark Cyan border
+
+                # 1. Subtle outline frame
+                draw.rectangle([(rx0, ry0), (rx1, ry1)], outline=dim_border, width=1)
+
+                # 2. Prominent High-Contrast Corner Brackets (HUD style)
+                cl = 22  # corner bracket arm length
+                # Top-Left
+                draw.line([(rx0, ry0), (rx0 + cl, ry0)], fill=corner_color, width=3)
+                draw.line([(rx0, ry0), (rx0, ry0 + cl)], fill=corner_color, width=3)
+                # Top-Right
+                draw.line([(rx1 - cl, ry0), (rx1, ry0)], fill=corner_color, width=3)
+                draw.line([(rx1, ry0), (rx1, ry0 + cl)], fill=corner_color, width=3)
+                # Bottom-Left
+                draw.line([(rx0, ry1), (rx0 + cl, ry1)], fill=corner_color, width=3)
+                draw.line([(rx0, ry1 - cl), (rx0, ry1)], fill=corner_color, width=3)
+                # Bottom-Right
+                draw.line([(rx1 - cl, ry1), (rx1, ry1)], fill=corner_color, width=3)
+                draw.line([(rx1, ry1 - cl), (rx1, ry1)], fill=corner_color, width=3)
+
+                # 3. Horizontal Reading Baseline / Alignment Guide
+                cx, cy = int((rx0 + rx1) // 2), int((ry0 + ry1) // 2)
+                # Margin alignment ticks
+                draw.line([(rx0 + 2, cy), (rx0 + 16, cy)], fill=reticle_color, width=2)
+                draw.line([(rx1 - 16, cy), (rx1 - 2, cy)], fill=reticle_color, width=2)
+                # Center crosshair notch
+                draw.line([(cx - 10, cy), (cx + 10, cy)], fill=reticle_color, width=1)
+                draw.line([(cx, cy - 8), (cx, cy + 8)], fill=reticle_color, width=1)
 
             # Decoded Braille cell letter overlays
             if overlays:
@@ -802,18 +840,40 @@ class ILI9488Display(DisplayDevice):
             # Header with battery widget
             self._draw_header(AppMode.SCANNER)
 
-            # Detection Pill Badge (centered right under header)
-            if status and "detected" in str(status).lower():
+            # Detection & Distance Pill Badge (centered right under header)
+            badge_text = None
+            badge_bg = (6, 95, 70)
+            badge_border = (52, 211, 153)
+
+            if distance_state == "ok":
+                badge_text = "SAKTO ANG DISTANSYA • READY"
+                badge_bg = (20, 83, 45)
+                badge_border = (34, 197, 94)
+            elif distance_state == "too_close":
+                badge_text = "MASYADONG MALAPIT • ILAYO"
+                badge_bg = (120, 53, 15)
+                badge_border = (245, 158, 11)
+            elif distance_state == "too_far":
+                badge_text = "MASYADONG MALAYO • ILAPIT"
+                badge_bg = (120, 53, 15)
+                badge_border = (245, 158, 11)
+            elif status and "detected" in str(status).lower():
                 status_str = str(status)[:46]
-                badge_w = 320
+                if "no " in status_str.lower() or "not" in status_str.lower():
+                    badge_text = status_str
+                    badge_bg = (153, 27, 27)
+                    badge_border = (239, 68, 68)
+                else:
+                    badge_text = status_str
+                    badge_bg = (6, 95, 70)
+                    badge_border = (52, 211, 153)
+
+            if badge_text:
+                badge_w = 340
                 bx0 = int((self._width - badge_w) // 2)
                 f_small = self._font_small or None
-                if "no " in status_str.lower() or "not" in status_str.lower():
-                    draw.rectangle([(bx0, 50), (bx0 + badge_w, 74)], fill=(153, 27, 27), outline=(239, 68, 68), width=1)
-                    draw.text((bx0 + 10, 54), status_str, fill=(255, 255, 255), font=f_small)
-                else:
-                    draw.rectangle([(bx0, 50), (bx0 + badge_w, 74)], fill=(6, 95, 70), outline=(52, 211, 153), width=1)
-                    draw.text((bx0 + 10, 54), status_str, fill=(255, 255, 255), font=f_small)
+                draw.rectangle([(bx0, 50), (bx0 + badge_w, 74)], fill=badge_bg, outline=badge_border, width=1)
+                draw.text((bx0 + 10, 54), badge_text, fill=(255, 255, 255), font=f_small)
 
             # Bottom Status Bar (solid fill to prevent text ghosting)
             lang = getattr(self, "_language", "en") or "en"

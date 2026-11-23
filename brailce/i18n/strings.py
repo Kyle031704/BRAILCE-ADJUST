@@ -310,6 +310,22 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "Dots too close. Move the camera slightly farther.",
         "fil": "Masyadong malapit. Ilayo nang kaunti ang kamera.",
     },
+    "SCANNER_DISTANCE_OK": {
+        "en": "Distance is good. Press Enter to scan.",
+        "fil": "Sakto ang distansya. Pindutin ang Enter para i-scan.",
+    },
+    "SCANNER_GUIDE_CLOSER": {
+        "en": "Move closer.",
+        "fil": "Ilapit nang kaunti.",
+    },
+    "SCANNER_GUIDE_FARTHER": {
+        "en": "Move farther.",
+        "fil": "Ilayo nang kaunti.",
+    },
+    "SCANNER_GUIDE_OK": {
+        "en": "Distance just right.",
+        "fil": "Sakto ang layo.",
+    },
     "SCANNER_CAMERA_NOT_CONNECTED": {
         "en": "Camera not connected.",
         "fil": "Hindi nakakonekta ang kamera.",

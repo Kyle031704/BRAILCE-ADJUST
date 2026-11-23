@@ -116,6 +116,10 @@ class OBREngine:
             logger.info("Optional secondary YOLO weights missing at %s (no runtime download).", self.model_path)
             return False
         try:
+            if self.model_path.endswith(".onnx") and cv2 is not None:
+                self._model = cv2.dnn.readNetFromONNX(self.model_path)
+                self.detected_schema = "onnx_yolo"
+                return True
             from ultralytics import YOLO
             self._model = YOLO(self.model_path)
             self.detected_schema = self._detect_model_schema()
@@ -133,6 +137,27 @@ class OBREngine:
         if any(n.lower() in {"number_sign", "capital", "period"} for n in str_names):
             return "named_classes"
         return "direct_characters"
+
+    def _run_yolo_inference(self, image: np.ndarray) -> List[Dict[str, Any]]:
+        """Run secondary YOLO detection on image and return bounding boxes list."""
+        if not self._model:
+            return []
+        boxes_out: List[Dict[str, Any]] = []
+        try:
+            if hasattr(self._model, "predict"):
+                preds = self._model.predict(image, conf=self.conf, iou=self.iou, verbose=False)
+                for r in preds:
+                    if not hasattr(r, "boxes") or r.boxes is None:
+                        continue
+                    for b in r.boxes:
+                        xywh = b.xywh[0].tolist()
+                        cls_id = int(b.cls[0])
+                        c_conf = float(b.conf[0])
+                        label = r.names.get(cls_id, str(cls_id)) if hasattr(r, "names") else str(cls_id)
+                        boxes_out.append({"x": xywh[0], "y": xywh[1], "w": xywh[2], "h": xywh[3], "name": label, "conf": c_conf})
+        except Exception as exc:
+            logger.debug("_run_yolo_inference error: %s", exc)
+        return boxes_out
 
     @classmethod
     def decode_cell_label(cls, raw_name: str) -> str:
@@ -841,6 +866,10 @@ class OBREngine:
                 small = image
 
             dots, dot_diam = self.detect_dots(small)
+            if len(dots) < 4:
+                dots_e, diam_e = self.detect_dots(self.enhance_contrast(small))
+                if len(dots_e) > len(dots):
+                    dots, dot_diam = dots_e, diam_e
             n = len(dots)
             if n < 4:
                 return 0.0
@@ -939,6 +968,55 @@ class OBREngine:
         """
         return self.braille_presence_confidence(image) >= confidence_threshold
 
+    def assess_braille_distance(self, image: np.ndarray, confidence_threshold: float = 0.40) -> Dict[str, Any]:
+        """
+        Real-time distance and readiness assessment for handheld camera aiming:
+        Evaluates dot count, median dot diameter, and pitch to guide user:
+          - "no_braille": insufficient dots or low presence confidence
+          - "too_close": dot diameter > 16px (camera closer than ~10cm)
+          - "too_far": dot diameter < 5px (camera farther than ~20cm)
+          - "ok": dot diameter 5px..16px and confidence >= threshold (nominally 12-15cm)
+        """
+        if image is None or cv2 is None or getattr(image, "size", 0) == 0:
+            return {"state": "no_braille", "confidence": 0.0, "dot_diameter": 0.0, "dot_pitch": 0.0, "dot_count": 0}
+
+        conf = self.braille_presence_confidence(image)
+        if conf < confidence_threshold:
+            return {"state": "no_braille", "confidence": conf, "dot_diameter": 0.0, "dot_pitch": 0.0, "dot_count": 0}
+
+        h, w = image.shape[:2]
+        if max(w, h) > 640:
+            scale = 640.0 / float(max(w, h))
+            small = cv2.resize(image, (int(w * scale), int(h * scale)))
+        else:
+            small = image
+
+        dots, dot_diam = self.detect_dots(small)
+        if len(dots) < 4:
+            dots_e, diam_e = self.detect_dots(self.enhance_contrast(small))
+            if len(dots_e) > len(dots):
+                dots, dot_diam = dots_e, diam_e
+        if len(dots) < 4:
+            return {"state": "no_braille", "confidence": conf, "dot_diameter": 0.0, "dot_pitch": 0.0, "dot_count": len(dots)}
+
+        skew_deg, p_dot = self._estimate_skew_and_pitch(dots, dot_diam)
+
+        # Distance thresholding based on physical Braille geometry
+        if dot_diam < 5.0 or p_dot < 12.0:
+            state = "too_far"
+        elif dot_diam > 16.5 or p_dot > 42.0:
+            state = "too_close"
+        else:
+            state = "ok"
+
+        return {
+            "state": state,
+            "confidence": conf,
+            "dot_diameter": dot_diam,
+            "dot_pitch": p_dot,
+            "dot_count": len(dots),
+        }
+
     def process_image(
         self,
         image: np.ndarray,
@@ -991,8 +1069,15 @@ class OBREngine:
         # 2. Suppress pure black printed ink
         clean_crop = self.suppress_printed_ink(crop)
 
-        # 3. Detect dots
+        # 3. Detect dots directly (preserves true geometric crescent pairs)
         dots, dot_diam = self.detect_dots(clean_crop)
+
+        # 3b. Adaptive contrast enhancement fallback for faint dots under diffuse lighting
+        if len(dots) < 4:
+            enhanced_crop = self.enhance_contrast(clean_crop)
+            e_dots, e_diam = self.detect_dots(enhanced_crop)
+            if len(e_dots) > len(dots):
+                dots, dot_diam = e_dots, e_diam
 
         # Automatic center-crop fallback if full frame produced < 2 dots
         if len(dots) < 2 and use_full and full_frame is None:
@@ -1003,6 +1088,10 @@ class OBREngine:
             c_crop = image[c_y0 : c_y0 + c_roi_h, c_x0 : c_x0 + c_roi_w].copy()
             clean_c = self.suppress_printed_ink(c_crop)
             c_dots, c_diam = self.detect_dots(clean_c)
+            if len(c_dots) < 4:
+                c_dots_e, c_diam_e = self.detect_dots(self.enhance_contrast(clean_c))
+                if len(c_dots_e) > len(c_dots):
+                    c_dots, c_diam = c_dots_e, c_diam_e
             if len(c_dots) >= 2:
                 crop = c_crop
                 clean_crop = clean_c
@@ -1044,6 +1133,23 @@ class OBREngine:
 
         cells = res.get("cells", [])
         boxes = res.get("boxes", [])
+
+        # Optional secondary YOLO evaluation if enabled and model available
+        if self.use_yolo_secondary and self._load_model():
+            try:
+                yolo_boxes = self._run_yolo_inference(crop)
+                if yolo_boxes:
+                    yolo_res = self.decode_boxes(yolo_boxes)
+                    if yolo_res.get("readable") and len(yolo_res.get("cells", [])) >= len(cells):
+                        logger.info("Secondary YOLO produced readable Braille result: %s", yolo_res.get("text"))
+                        res["text"] = yolo_res["text"]
+                        res["cells"] = yolo_res["cells"]
+                        res["readable"] = True
+                        res["reason"] = "ok"
+                        cells = res.get("cells", [])
+                        boxes = res.get("boxes", [])
+            except Exception as yolo_exc:
+                logger.debug("Secondary YOLO inference skipped: %s", yolo_exc)
         dot_pitch = float(res.get("dot_pitch", 0.0))
         lines_count = len(set(c.get("line_index", 0) for c in cells)) if cells else 0
         unknown_count = sum(1 for c in cells if c.get("char") == UNKNOWN_CELL_CHAR)

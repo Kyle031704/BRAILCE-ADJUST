@@ -80,6 +80,9 @@ class ScannerMode(BaseMode):
         self._braille_detected: Optional[bool] = None
         self._camera_error_reported: bool = False
         self._last_announce_time: float = 0.0
+        self._distance_state: str = "no_braille"
+        self._last_distance_announce_time: float = 0.0
+        self._last_distance_announced_state: Optional[str] = None
 
     @property
     def mode_type(self) -> AppMode:
@@ -161,6 +164,8 @@ class ScannerMode(BaseMode):
         self._last_result = None
         self._scanned_frame = None
         self._braille_detected = None
+        self._distance_state = "no_braille"
+        self._last_distance_announced_state = None
         if getattr(self.app, "display", None):
             ready = get_string("SCANNER_READY", lang)
             if hasattr(self.app.display, "show_scanner_viewfinder"):
@@ -215,12 +220,21 @@ class ScannerMode(BaseMode):
                         pass
 
                 obr = self.app.obr
-                if hasattr(obr, "braille_presence_confidence"):
+                distance_state = "no_braille"
+                if hasattr(obr, "assess_braille_distance"):
+                    dist_info = obr.assess_braille_distance(frame, confidence_threshold=conf_threshold)
+                    conf = dist_info.get("confidence", 0.0)
+                    detected = conf >= conf_threshold
+                    distance_state = dist_info.get("state", "no_braille") if detected else "no_braille"
+                    logger.debug("Braille distance assessment: %s conf=%.2f", dist_info, conf)
+                elif hasattr(obr, "braille_presence_confidence"):
                     conf = obr.braille_presence_confidence(frame)
                     detected = conf >= conf_threshold
                     logger.debug("Braille presence confidence=%.2f threshold=%.2f detected=%s", conf, conf_threshold, detected)
                 else:
                     detected = bool(obr.detect_braille_presence(frame))
+
+                self._distance_state = distance_state
 
                 if detected:
                     pos_streak += 1
@@ -229,15 +243,27 @@ class ScannerMode(BaseMode):
                         became_detected = self._braille_detected is not True
                         self._braille_detected = True
                         now = time.monotonic()
-                        if (
-                            became_detected
-                            and not self.scanned_text
-                            and (now - self._last_announce_time) >= self.ANNOUNCEMENT_COOLDOWN_S
-                        ):
-                            self._last_announce_time = now
-                            if getattr(self.app, "speech", None):
+
+                        # Intelligent, rate-limited voice distance & presence guidance
+                        if not self.scanned_text and (now - self._last_distance_announce_time) >= 3.0:
+                            prompt_key = None
+                            if distance_state == "ok" and self._last_distance_announced_state != "ok":
+                                prompt_key = "SCANNER_DISTANCE_OK"
+                                self._last_distance_announced_state = "ok"
+                            elif distance_state == "too_far" and self._last_distance_announced_state != "too_far":
+                                prompt_key = "SCANNER_GUIDE_CLOSER"
+                                self._last_distance_announced_state = "too_far"
+                            elif distance_state == "too_close" and self._last_distance_announced_state != "too_close":
+                                prompt_key = "SCANNER_GUIDE_FARTHER"
+                                self._last_distance_announced_state = "too_close"
+                            elif became_detected and (now - self._last_announce_time) >= self.ANNOUNCEMENT_COOLDOWN_S:
+                                prompt_key = "SCANNER_BRAILLE_DETECTED"
+                                self._last_announce_time = now
+
+                            if prompt_key and getattr(self.app, "speech", None):
+                                self._last_distance_announce_time = now
                                 self.app.speech.speak_text(
-                                    get_string("SCANNER_BRAILLE_DETECTED", self._lang()),
+                                    get_string(prompt_key, self._lang()),
                                     interrupt=False,
                                 )
                 else:
@@ -245,6 +271,8 @@ class ScannerMode(BaseMode):
                     pos_streak = 0
                     if neg_streak >= self.PRESENCE_NEGATIVE_FRAMES:
                         self._braille_detected = False
+                        self._distance_state = "no_braille"
+                        self._last_distance_announced_state = None
             except Exception as exc:
                 logger.debug("Presence detection error: %s", exc)
 
@@ -283,11 +311,23 @@ class ScannerMode(BaseMode):
                             lang = self._lang()
                             if self.scanned_text:
                                 status = self.scanned_text
+                            elif self._distance_state == "ok":
+                                status = get_string("SCANNER_DISTANCE_OK", lang)
+                            elif self._distance_state == "too_close":
+                                status = get_string("SCANNER_MOVE_FARTHER", lang)
+                            elif self._distance_state == "too_far":
+                                status = get_string("SCANNER_MOVE_CLOSER", lang)
                             elif self._braille_detected is True:
                                 status = get_string("SCANNER_BRAILLE_DETECTED", lang)
                             else:
                                 status = get_string("SCANNER_READY", lang)
                             try:
+                                self.app.display.show_camera_preview(
+                                    frame,
+                                    status=status,
+                                    distance_state=self._distance_state,
+                                )
+                            except TypeError:
                                 self.app.display.show_camera_preview(frame, status=status)
                             except Exception as disp_exc:
                                 logger.debug("Display show_camera_preview error: %s", disp_exc)

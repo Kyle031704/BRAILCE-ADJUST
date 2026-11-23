@@ -500,13 +500,35 @@ class UsbWebcamDevice(CameraDevice):
 
             # Focus controls
             try:
-                if not self.autofocus and self.focus_value >= 0:
+                env_focus = os.environ.get("BRAILCE_WEBCAM_FOCUS")
+                focus_target = int(env_focus) if (env_focus and env_focus.isdigit()) else self.focus_value
+                if not self.autofocus and focus_target >= 0:
                     self._cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
-                    self._cap.set(cv2.CAP_PROP_FOCUS, float(self.focus_value))
+                    self._cap.set(cv2.CAP_PROP_FOCUS, float(focus_target))
                 elif self.autofocus:
                     self._cap.set(cv2.CAP_PROP_AUTOFOCUS, 1)
             except Exception:
                 pass
+
+            # White balance & exposure stabilization for white paper under room light
+            try:
+                # Keep auto white-balance active
+                for wb_prop in (getattr(cv2, "CAP_PROP_AUTO_WB_TEMP", 45), getattr(cv2, "CAP_PROP_AUTOWB", 44)):
+                    try:
+                        self._cap.set(wb_prop, 1)
+                    except Exception:
+                        pass
+
+                # Exposure tuning: avoid over-exposing pure white paper
+                env_exp = os.environ.get("BRAILCE_WEBCAM_EXPOSURE")
+                if env_exp is not None:
+                    try:
+                        self._cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25 if os.name == "nt" else 1)
+                        self._cap.set(cv2.CAP_PROP_EXPOSURE, float(env_exp))
+                    except Exception:
+                        pass
+            except Exception as exc:
+                logger.debug("UsbWebcamDevice exposure/wb tuning skipped: %s", exc)
         except Exception as exc:
             logger.debug("UsbWebcamDevice configure warning: %s", exc)
 
