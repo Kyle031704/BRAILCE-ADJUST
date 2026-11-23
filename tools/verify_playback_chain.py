@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Verify the Brailce playback chain (numpy + wave only, no scipy).
 
@@ -7,7 +7,15 @@ playback format and levels:
   - 22050 Hz sample rate
   - mono (1 channel)
   - 16-bit signed PCM
-  - active RMS within 3500-5000 (audio_normalize active-window semantics)
+  - active RMS within max(800, 0.5x)..2.2x of
+    brailce.speech.audio_normalize.TARGET_ACTIVE_RMS (audio_normalize
+    active-window semantics). The band is DERIVED from TARGET_ACTIVE_RMS so
+    the tool stays truthful at any mastered bank level: when
+    tools/set_bank_level.py re-masters the bank and re-baselines
+    TARGET_ACTIVE_RMS, this checker follows automatically. The 2.2x upper
+    bound is measured, not arbitrary: after per-file peak normalization the
+    bank's active-RMS spread is 0.63..2.05x its median, so a tighter 1.5x
+    cap would false-flag ~20 loud low-crest files at every level.
   - peak <= 30000
   - no clipped samples (no |sample| >= 32767)
 
@@ -26,15 +34,20 @@ from typing import Tuple
 
 import numpy as np
 
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from brailce.speech.audio_normalize import TARGET_ACTIVE_RMS
+
 TARGET_SR = 22050
 TARGET_CH = 1
 TARGET_SW = 2
-MIN_ACTIVE_RMS = 3500.0
-MAX_ACTIVE_RMS = 5000.0
+MIN_ACTIVE_RMS = max(800.0, 0.5 * TARGET_ACTIVE_RMS)
+MAX_ACTIVE_RMS = 2.2 * TARGET_ACTIVE_RMS
 MAX_PEAK = 30000
 CLIP_ABS = 32767
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 AUDIO_ROOT = os.path.join(PROJECT_ROOT, "brailce", "audio")
 SPEECH_ROOT = os.path.join(PROJECT_ROOT, "brailce", "speech")
 
@@ -127,7 +140,8 @@ def main() -> int:
             print("  -", v)
         return 1
     print("\nPlayback chain OK: all WAVs 22050 Hz mono 16-bit, active RMS "
-          f"{MIN_ACTIVE_RMS:.0f}-{MAX_ACTIVE_RMS:.0f}, peak <= {MAX_PEAK}, no clipped samples, no np.repeat")
+          f"{MIN_ACTIVE_RMS:.0f}-{MAX_ACTIVE_RMS:.0f} (derived from TARGET_ACTIVE_RMS={TARGET_ACTIVE_RMS:.0f}), "
+          f"peak <= {MAX_PEAK}, no clipped samples, no np.repeat")
     return 0
 
 

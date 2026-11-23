@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 TARGET_SAMPLE_RATE = 22050
 TARGET_CHANNELS = 1
 TARGET_SAMPWIDTH = 2
+# Re-baselined by tools/set_bank_level.py whenever the bank is re-mastered to a
+# measured clean-speaker peak; keeps live Piper/Filipino synthesis at the bank level.
 TARGET_ACTIVE_RMS = 4200.0
 MAX_PEAK_INT16 = 30000.0
 DEFAULT_PRE_SILENCE_MS = 120

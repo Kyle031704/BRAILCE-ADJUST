@@ -98,3 +98,6 @@ ehthumbs.db
 Desktop.ini
 .gemini/
 
+
+# Speaker level sweep output (tools/make_speaker_sweep.py / speaker_level_sweep.sh)
+speaker_sweep_out/

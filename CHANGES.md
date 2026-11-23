@@ -262,3 +262,19 @@ The deploy scripts wrote a direct `hw` `!default` chain (no softvol, no dmix) to
 
 #### VERIFIED
 `tools/verify_playback_chain.py` clean over 853 WAVs; audio/config/manifest pytest suites 32/33 (only the pre-existing enye `char_?.wav` failure); `bash -n` + stubbed dry-runs OK for all three scripts (identical chains to $HOME and /etc with both card-number and name fallback).
+
+---
+
+### Section F — Speaker Output Level Sweep & Bank Re-Master Tooling (2026-11-23)
+
+#### WHY
+The remaining "basag" is level-driven: the active-RMS-4200 / peak-30000 bank overloads the MAX98357A / sndrpihifiberry amp chain somewhere above the clean-but-quiet peak-5000 zone, and the true clean ceiling is unknown until it is MEASURED by ear on the device.
+
+#### FIXES
+- **New `tools/make_speaker_sweep.py`** (numpy+wave only): linear-scaled `char_A.wav`/`word_ano.wav` copies at peaks 4000-28000 plus 1000 Hz sines at 4000/12000/20000, 22050 Hz mono 16-bit, no filtering / resampling / RMS re-normalization; aborts unless both sources are 22050/mono/16-bit.
+- **New `tools/speaker_level_sweep.sh [direct]`**: generates `speaker_sweep_out/`, plays every charA + word_ano in ascending peak order with `>>> PEAK N - pakiramdaman kung malinis o basag` labels (app route `aplay -q`; direct route `aplay -D plughw:<card>,0 -q` with the DAC detected via `aplay -l` grep dac|hifiberry|max98357|pcm5102a — no numeric fallback, falls back to the app route with a notice), then the three sines, ending with the EN+FIL summary (highest clean peak on BOTH letra at salita; basag-from-4000 means level is NOT the problem; the `python3 tools/set_bank_level.py --peak <malinis na peak na 2 hakbang mas mababa>` follow-up with the 12000-clean/14000-basag -> `--peak 10000` example; the ugly top levels are the point; restart the service after).
+- **New `tools/set_bank_level.py --peak N` (+ `--dry-run`)**: re-masters every bank WAV to its own peak N (linear, +/-32767 clip-guard, 22050/mono/16-bit preserved, format-gated with a clear abort, atomic temp+rename writes, progress every 150 files), re-baselines `TARGET_ACTIVE_RMS` in `audio_normalize.py` to the post-scale median active RMS (frames above amplitude 500, rounded to the nearest 100), regenerates `english_audio_manifest.sha256` + `FROZEN_ENGLISH_CHARACTERS_SHA256`, and auto-runs `tools/verify_playback_chain.py`, printing its verdict + the restart line.
+- **`tools/verify_playback_chain.py`**: expected active-RMS band now derives from `brailce.speech.audio_normalize.TARGET_ACTIVE_RMS` (`max(800, 0.5x)..2.2x`) instead of hard-coded 3500-5000, so the checker stays truthful at any mastered level. `brailce/speech/audio_normalize.py` received a comment only (value still 4200.0); `.gitignore` now ignores `speaker_sweep_out/`.
+
+#### VERIFIED
+py_compile OK for every new/changed .py; `bash -n tools/speaker_level_sweep.sh` OK; smoke run into a temp dir OUTSIDE the repo produced 23 WAVs with every peak EXACTLY on target (temp dir deleted, no WAVs committed); `python tools/verify_playback_chain.py` still passes the current bank (853 WAVs, band 2100-9240 derived from T=4200); `set_bank_level.py --peak 10000 --dry-run` projects 853 files / median active RMS 2574 / new TARGET 2600 with zero writes; pytest (playback chain, english frozen, filipino tts v2, configuration, audio audit, filipino keystrokes): 78 passed / 1 pre-existing failure (missing enye keystroke WAV, documented since JOB 2).
