@@ -18,6 +18,8 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
+import numpy as np
+
 from brailce.core.events import AppMode, EventType, InputEvent
 from brailce.i18n.strings import get_mode_name, get_string
 from brailce.modes.base_mode import BaseMode
@@ -151,10 +153,10 @@ class ScannerMode(BaseMode):
             return
 
         if event.event_type == EventType.ENTER_PRESSED:
-            if self._last_result and self.scanned_text:
-                self._start_readout_thread(self._last_result)
-            else:
-                self._start_scan()
+            # Always interrupt active readout, clear old state, and trigger a fresh scan
+            self._stop_readout(announce_stopped=False)
+            self._reset_scan_state()
+            self._start_scan()
         elif event.event_type == EventType.CLEAR_PRESSED:
             self._reset_scan_state()
 
@@ -410,10 +412,41 @@ class ScannerMode(BaseMode):
         now = time.monotonic()
         candidates: List[Any] = []
 
+        # 1. Fresh camera capture (with hardware buffer flush)
+        try:
+            fresh = None
+            if hasattr(cam, "flush_and_capture"):
+                try:
+                    res = cam.flush_and_capture(num_grabs=5)
+                    if isinstance(res, np.ndarray) and res.size > 0:
+                        fresh = res
+                except Exception:
+                    pass
+            if fresh is None:
+                if hasattr(cam, "capture_sharpest"):
+                    res = cam.capture_sharpest()
+                    if isinstance(res, np.ndarray) and res.size > 0:
+                        fresh = res
+                elif hasattr(cam, "capture_still"):
+                    res = cam.capture_still()
+                    if isinstance(res, np.ndarray) and res.size > 0:
+                        fresh = res
+                else:
+                    res = cam.capture_image()
+                    if isinstance(res, np.ndarray) and res.size > 0:
+                        fresh = res
+            if fresh is not None:
+                candidates.append(fresh)
+        except CameraNotConnectedError:
+            self._report_camera_missing()
+            return candidates
+        except Exception as exc:
+            logger.debug("Candidate fresh capture failed: %s", exc)
+
         with self._frame_lock:
             buffer_items = list(self._sharp_frames)
 
-        # 1. Look for pre-press stable frames (0.25s - 1.2s ago)
+        # 2. Look for pre-press stable frames (0.25s - 1.2s ago)
         pre_press = [
             item for item in buffer_items
             if isinstance(item, (tuple, list)) and len(item) >= 3 and (0.25 <= (now - item[0]) <= 1.20)
@@ -421,20 +454,6 @@ class ScannerMode(BaseMode):
         if pre_press:
             best_pre = max(pre_press, key=lambda item: item[1])[2].copy()
             candidates.append(best_pre)
-
-        # 2. Add fresh camera capture
-        try:
-            if hasattr(cam, "capture_sharpest"):
-                fresh = cam.capture_sharpest()
-            else:
-                fresh = cam.capture_image()
-            if fresh is not None and getattr(fresh, "size", 0) > 0:
-                candidates.append(fresh)
-        except CameraNotConnectedError:
-            self._report_camera_missing()
-            return candidates
-        except Exception as exc:
-            logger.debug("Candidate fresh capture failed: %s", exc)
 
         # 3. Add overall sharpest buffered frame
         if buffer_items:
@@ -473,6 +492,7 @@ class ScannerMode(BaseMode):
     def _scan_worker(self) -> None:
         """Capture candidate frames, run OBR engine, report actionable error or start readout."""
         lang = self._lang()
+        result: Optional[Dict[str, Any]] = None
         try:
             if not getattr(self.app, "obr", None):
                 self._report_camera_missing()
@@ -518,11 +538,19 @@ class ScannerMode(BaseMode):
             self._scanned_frame = best_frame
             result = best_result or {"readable": False, "reason": "no_braille"}
 
+            # Log Scanner result to terminal on every scan for PuTTY visibility
+            readable = bool(result.get("readable", False))
+            text_res = str(result.get("text", "")).strip()
+            reason_res = str(result.get("reason", "unknown"))
+            cells_count = len(result.get("cells", []))
+            print(f"Scanner result: readable={readable} text='{text_res}' cells={cells_count} reason={reason_res}", flush=True)
+            logger.info("Scanner result: readable=%s text='%s' cells=%d reason=%s", readable, text_res, cells_count, reason_res)
+
             if self._stop_readout_event.is_set():
                 # Esc pressed during scan: discard result without announcements or readout
                 return
 
-            if not result.get("readable") or not str(result.get("text", "")).strip():
+            if not readable or not text_res:
                 logger.warning("Scanner mode: scan unreadable, result=%r", result)
                 reason = str(result.get("reason", "no_braille"))
                 key = self._REASON_TO_STRING_KEY.get(reason, "SCANNER_NO_BRAILLE")
@@ -534,14 +562,25 @@ class ScannerMode(BaseMode):
                     self.app.speech.speak_text(msg, interrupt=True)
                 return
 
-            self.scanned_text = str(result["text"]).strip()
+            self.scanned_text = text_res
             self._last_result = result
             if getattr(self.app, "display", None):
                 self.app.display.show_text_buffer(self.scanned_text)
+        except Exception as exc:
+            logger.exception("Scanner worker encountered error: %s", exc)
+            print(f"Scanner result: readable=False error={exc}", flush=True)
         finally:
             self._is_scanning = False
+            # If scan was unreadable or failed: clear scan locks so preview + distance guidance resume
+            if result is None or not result.get("readable") or not str(result.get("text", "")).strip():
+                self.scanned_text = None
+                self._last_result = None
+                self._scanned_frame = None
+                self._braille_detected = None
+                self._distance_state = "no_braille"
+                self._last_distance_announced_state = None
 
-        if self._last_result is not None:
+        if self._last_result is not None and not self._stop_readout_event.is_set():
             self._start_readout_thread(self._last_result)
 
     def _start_readout_thread(self, result: Dict[str, Any]) -> None:
@@ -697,8 +736,21 @@ class ScannerMode(BaseMode):
                         pass
         finally:
             self._is_reading = False
-            if display and self.scanned_text and not self._stop_readout_event.is_set():
-                display.show_text_buffer(self.scanned_text)
+            self._is_scanning = False
+            if not self._stop_readout_event.is_set():
+                if display and self.scanned_text:
+                    display.show_text_buffer(self.scanned_text)
+                self._stop_readout_event.wait(0.6)
+                # Auto-return to live preview and distance guidance
+                self._reset_scan_state()
+            else:
+                # Cancelled by Esc or keypress: clear locks so preview resumes
+                self.scanned_text = None
+                self._last_result = None
+                self._scanned_frame = None
+                self._braille_detected = None
+                self._distance_state = "no_braille"
+                self._last_distance_announced_state = None
 
     def on_enter(self) -> None:
         logger.info("Entered Scanner Mode.")

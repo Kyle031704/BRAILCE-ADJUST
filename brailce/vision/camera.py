@@ -63,6 +63,10 @@ class CameraDevice(ABC):
         """Capture a high-quality still frame (defaults to capture_image)."""
         return self.capture_image()
 
+    def flush_and_capture(self, num_grabs: int = 5) -> Optional[np.ndarray]:
+        """Flush stale camera hardware frames and capture an instantaneous fresh frame."""
+        return self.capture_still()
+
     def capture_sharpest(self, n: int = 5) -> Optional[np.ndarray]:
         """Capture N frames and return the one with the highest Laplacian sharpness."""
         best_frame = None
@@ -591,16 +595,41 @@ class UsbWebcamDevice(CameraDevice):
         """Alias for capture_image."""
         return self.capture_image()
 
-    def capture_still(self) -> Optional[np.ndarray]:
-        """Capture clean still frame directly without disruptive on-the-fly resolution switching."""
+    def flush_and_capture(self, num_grabs: int = 5) -> Optional[np.ndarray]:
+        """
+        Flush OpenCV hardware buffer (4-5 times cap.grab() before read())
+        to guarantee zero stale-frame latency on ENTER scan trigger.
+        """
         if not self._is_active:
             raise CameraNotConnectedError(self.init_error or "Camera not connected")
+
+        if self._cap and self._cap.isOpened():
+            for _ in range(max(1, num_grabs)):
+                self._cap.grab()
+            ret, frame = self._cap.read()
+            if ret and frame is not None and frame.size > 0:
+                with self._lock:
+                    self._latest_frame = frame
+                return frame.copy()
 
         with self._lock:
             if self._latest_frame is not None and getattr(self._latest_frame, "size", 0) > 0:
                 return self._latest_frame.copy()
 
         return self.capture_image()
+
+    def capture_still(self) -> Optional[np.ndarray]:
+        """Capture clean still frame directly, flushing ring buffer to ensure instantaneous freshness."""
+        if not self._is_active:
+            raise CameraNotConnectedError(self.init_error or "Camera not connected")
+
+        try:
+            return self.flush_and_capture(num_grabs=5)
+        except Exception:
+            with self._lock:
+                if self._latest_frame is not None and getattr(self._latest_frame, "size", 0) > 0:
+                    return self._latest_frame.copy()
+            return self.capture_image()
 
     def reconnect(self) -> bool:
         """Attempt to re-initialize camera connection without crashing."""
