@@ -310,6 +310,12 @@ class KeyboardInputDevice(InputDevice):
             self._emit_event(control_event(EventType.QUIT, self.SOURCE_NAME))
             return
 
+        if key_name.lower() == "power":
+            self._emit_event(
+                control_event(EventType.POWER_BUTTON_PRESSED, self.SOURCE_NAME)
+            )
+            return
+
         if key_name.lower() in CONTROL_KEY_MAP:
             evt_type = CONTROL_KEY_MAP[key_name.lower()]
             self._emit_event(control_event(evt_type, self.SOURCE_NAME))

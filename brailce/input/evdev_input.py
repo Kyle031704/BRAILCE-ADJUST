@@ -177,6 +177,7 @@ class EvdevInputDevice(KeyboardInputDevice):
         "F1": "f1", "F2": "f2", "F3": "f3", "F11": "f11", "F12": "f12",
         "GRAVE": "`",
         "DELETE": "delete",
+        "POWER": "power",
         "MINUS": "-", "EQUAL": "=",
         "COMMA": ",", "DOT": ".", "SLASH": "/",
         "SEMICOLON": ";", "APOSTROPHE": "'",

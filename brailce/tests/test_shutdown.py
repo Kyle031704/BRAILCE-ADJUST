@@ -482,3 +482,63 @@ class TestShutdownConfig:
         assert config.get("power", "shutdown_gpio") == 27
         assert config.get("power", "shutdown_hold_seconds", default=2.0) == 2.0
         assert config.get("power", "shutdown_pull_up", default=True) is True
+
+
+class TestBackspacePowerCombo:
+    """User combo: pressing Backspace and Power Button at the same time."""
+
+    def test_backspace_then_power_button_triggers_shutdown(self) -> None:
+        app = _app()
+        calls = []
+        app._handle_shutdown_pressed = lambda: calls.append("shutdown")
+
+        # Press backspace
+        app._on_input_event(control_event(EventType.BACKSPACE_PRESSED, "test"))
+        assert calls == []
+
+        # Press power button within 1.5s
+        app._on_input_event(control_event(EventType.POWER_BUTTON_PRESSED, "test"))
+        assert calls == ["shutdown"]
+
+    def test_power_button_then_backspace_triggers_shutdown(self) -> None:
+        app = _app()
+        calls = []
+        app._handle_shutdown_pressed = lambda: calls.append("shutdown")
+
+        # Press power button
+        app._on_input_event(control_event(EventType.POWER_BUTTON_PRESSED, "test"))
+        assert calls == []
+
+        # Press backspace within 1.5s
+        app._on_input_event(control_event(EventType.BACKSPACE_PRESSED, "test"))
+        assert calls == ["shutdown"]
+
+    def test_backspace_alone_does_not_trigger_shutdown(self) -> None:
+        app = _app()
+        calls = []
+        app._handle_shutdown_pressed = lambda: calls.append("shutdown")
+
+        app._on_input_event(control_event(EventType.BACKSPACE_PRESSED, "test"))
+        assert calls == []
+
+    def test_power_button_alone_does_not_trigger_shutdown(self) -> None:
+        app = _app()
+        calls = []
+        app._handle_shutdown_pressed = lambda: calls.append("shutdown")
+
+        app._on_input_event(control_event(EventType.POWER_BUTTON_PRESSED, "test"))
+        assert calls == []
+
+    def test_held_gpio_button_with_backspace_triggers_shutdown(self) -> None:
+        app = _app()
+        calls = []
+        app._handle_shutdown_pressed = lambda: calls.append("shutdown")
+
+        mock_button = MagicMock()
+        mock_button.is_pressed = True
+        app.shutdown_button = mock_button
+
+        # Pressing backspace while power button is held down
+        app._on_input_event(control_event(EventType.BACKSPACE_PRESSED, "test"))
+        assert calls == ["shutdown"]
+

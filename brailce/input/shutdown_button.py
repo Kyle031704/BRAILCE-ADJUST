@@ -53,18 +53,30 @@ class ShutdownButton(InputDevice):
         pin: int,
         hold_seconds: float = 2.0,
         pull_up: bool = True,
+        require_backspace: bool = False,
     ) -> None:
         super().__init__()
         self._pin = int(pin)
         self._hold_seconds = max(0.1, float(hold_seconds))
         self._pull_up = bool(pull_up)
+        self._require_backspace = bool(require_backspace)
         self._button: Optional[Any] = None
         self._running = False
 
     @property
+    def is_pressed(self) -> bool:
+        """Return True if the physical button is currently held down."""
+        if self._button is not None:
+            try:
+                return bool(self._button.is_pressed)
+            except Exception:
+                return False
+        return False
+
+    @property
     def device_name(self) -> str:
-        return "GPIO Shutdown Button (BCM {}, hold {:.1f}s)".format(
-            self._pin, self._hold_seconds
+        return "GPIO Shutdown Button (BCM {}, hold {:.1f}s, combo={})".format(
+            self._pin, self._hold_seconds, self._require_backspace
         )
 
     # ---- Lifecycle ----
@@ -86,12 +98,14 @@ class ShutdownButton(InputDevice):
                 bounce_time=0.05,
                 hold_time=self._hold_seconds,
             )
+            self._button.when_pressed = self._on_pressed
             self._button.when_held = self._on_held
             logger.info(
-                "GPIO shutdown button armed on BCM pin %d (hold %.1f s, pull_up=%s).",
+                "GPIO shutdown button armed on BCM pin %d (hold %.1f s, pull_up=%s, require_backspace=%s).",
                 self._pin,
                 self._hold_seconds,
                 self._pull_up,
+                self._require_backspace,
             )
         except Exception as exc:
             # e.g. no pin factory / not a Pi: keep the service running
@@ -113,12 +127,25 @@ class ShutdownButton(InputDevice):
 
     # ---- Callback ----
 
-    def _on_held(self) -> None:
-        """gpiozero hold callback: route SHUTDOWN_PRESSED to the app handler."""
+    def _on_pressed(self) -> None:
+        """gpiozero press callback: emit POWER_BUTTON_PRESSED for combo detection."""
         if not self._running:
             return
-        logger.info(
-            "GPIO shutdown button held %.1f s - emitting SHUTDOWN_PRESSED.",
-            self._hold_seconds,
-        )
-        self._emit_event(control_event(EventType.SHUTDOWN_PRESSED, self.SOURCE_NAME))
+        logger.debug("GPIO power button pressed on pin %d", self._pin)
+        self._emit_event(control_event(EventType.POWER_BUTTON_PRESSED, self.SOURCE_NAME))
+
+    def _on_held(self) -> None:
+        """gpiozero hold callback: route SHUTDOWN_PRESSED when hold mode is allowed."""
+        if not self._running:
+            return
+        if not self._require_backspace:
+            logger.info(
+                "GPIO shutdown button held %.1f s (hold mode) - emitting SHUTDOWN_PRESSED.",
+                self._hold_seconds,
+            )
+            self._emit_event(control_event(EventType.SHUTDOWN_PRESSED, self.SOURCE_NAME))
+        else:
+            logger.debug(
+                "GPIO power button held %.1f s (awaiting Backspace combo)",
+                self._hold_seconds,
+            )

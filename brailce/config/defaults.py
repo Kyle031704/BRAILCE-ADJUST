@@ -159,14 +159,15 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "poll_interval_seconds": 60,
         # Background battery poller interval (LCD refresh + announcements)
         "poll_seconds": 30,
-        # Optional GPIO long-press power switch (safe shutdown):
-        # BCM pin number when wired (e.g. 17); null = disabled.
-        # The button must be held for shutdown_hold_seconds to trigger
-        # the same safe shutdown as the Ctrl+P keyboard combo.
+        # Safe shutdown power button:
+        # shutdown_gpio: BCM pin number when a power switch is wired (e.g. 17); null = disabled.
+        # shutdown_requires_backspace: when True, pressing both Backspace and the
+        # power button at the same time triggers safe shutdown.
         "shutdown_gpio": None,
         "shutdown_hold_seconds": 2.0,
         # Internal pull-up: wire the button between the pin and GND
         "shutdown_pull_up": True,
+        "shutdown_requires_backspace": False,
     },
 
     # ---- Vision ----

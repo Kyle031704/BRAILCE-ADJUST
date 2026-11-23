@@ -414,3 +414,16 @@ The device runs headless under `brailce.service` (no SSH session): power-ON is a
 - Regression suites: `test_esc_stops.py` (28), `test_input.py` (15), `test_evdev_input.py` (59), `test_configuration.py` (14), `test_events.py` (16), `test_battery_poller.py` (17), `test_power.py` (20), `test_speech_service.py` (20), `test_math_mode.py` (14), `test_audio_audit.py` (5) + new 36 = 285 collected; targeted run **284 passed / 1 failed** - the failure (`test_math_mode_filipino_lcd_and_speech_use_same_string`) re-proven pre-existing at HEAD via a pristine `git archive HEAD` tree run (identical assertion).
 - Full suite: **721 passed / 6 failed / 1 skipped** - all 6 failures are the documented pre-existing HEAD set (AI/fil-AI/fil-math speech-routing asserts x3, Filipino keypress crash x2, OBR synthetic vision accuracy x1); zero new failures. `py_compile` OK on every changed .py.
 - SCOPE untouched: pronunciation banks, scanner, display, battery polling logic, ALSA/scripts, mode logic.
+
+### Section N — Custom Keypad Safe Shutdown: Backspace + Power Button Combo (2026-11-23)
+
+#### WHY
+The physical Brailce device uses a dedicated custom keypad with only 40 keys: A-Z, 0-9, + - * / . , ? !, and Backspace. There is NO "Ctrl" key, so the `Ctrl+P` shutdown shortcut cannot be typed. Per user request, safe shutdown is triggered by pressing **both Backspace and the Power Button at the same time**. This prevents accidental power-offs while typing or carrying the device.
+
+#### FIX
+- `brailce/core/events.py`: Added `EventType.POWER_BUTTON_PRESSED` to represent power button presses from GPIO or evdev `KEY_POWER`.
+- `brailce/input/shutdown_button.py`: `ShutdownButton` now records `_on_pressed` and emits `POWER_BUTTON_PRESSED`, exposes `is_pressed` property for real-time held state, and supports `require_backspace` configuration.
+- `brailce/input/evdev_input.py`: Added `KEY_POWER` to `KEY_NAME_BY_SUFFIX` so Pi 5 onboard/external power buttons map to `"power"`.
+- `brailce/input/keyboard_input.py`: Added `"power"` handling in `_dispatch_key_name` emitting `POWER_BUTTON_PRESSED`.
+- `brailce/core/app.py`: Tracks `_last_backspace_time` and `_last_power_button_time`. When `BACKSPACE_PRESSED` occurs while the power button is held (or pressed within 1.5s), or when `POWER_BUTTON_PRESSED` occurs within 1.5s of Backspace, `_handle_shutdown_pressed()` fires safe shutdown (voice announcement -> display status -> audio drain -> `systemctl poweroff`).
+- `brailce/tests/test_shutdown.py`: Added `TestBackspacePowerCombo` (5 new tests verifying Backspace+Power combo, Power+Backspace combo, held GPIO button, and that Backspace or Power alone never triggers shutdown). All 41 tests pass.

@@ -89,8 +89,10 @@ class BrailceApp:
         self._modes: dict[AppMode, BaseMode] = {}
         self._active_mode: Optional[BaseMode] = None
 
-        # Safe shutdown (Ctrl+P / GPIO long-press) fires exactly once per run
+        # Safe shutdown (Ctrl+P / GPIO long-press / Backspace+Power combo) fires exactly once per run
         self._shutdown_requested: bool = False
+        self._last_backspace_time: float = 0.0
+        self._last_power_button_time: float = 0.0
 
     # ---- Lifecycle ----
 
@@ -371,10 +373,32 @@ class BrailceApp:
                 return
 
             if event.event_type == EventType.SHUTDOWN_PRESSED:
-                # Ctrl+P or GPIO long-press: safe shutdown (announce,
-                # clean up, power off). Fires exactly once per run.
+                # Direct safe shutdown event (announce, clean up, power off)
                 self._handle_shutdown_pressed()
                 return
+
+            if event.event_type == EventType.POWER_BUTTON_PRESSED:
+                # Power button pressed: check if Backspace was pressed at the same time (within 1.5s)
+                now = time.time()
+                self._last_power_button_time = now
+                if (now - self._last_backspace_time) < 1.5:
+                    logger.info("Power Button + Backspace combo detected -> initiating safe shutdown.")
+                    self._handle_shutdown_pressed()
+                return
+
+            if event.event_type == EventType.BACKSPACE_PRESSED:
+                # Check if Power Button is pressed at the same time (held or pressed within 1.5s)
+                now = time.time()
+                self._last_backspace_time = now
+                power_held = (
+                    self.shutdown_button is not None
+                    and getattr(self.shutdown_button, "is_pressed", False)
+                )
+                power_recent = (now - self._last_power_button_time) < 1.5
+                if power_held or power_recent:
+                    logger.info("Backspace + Power Button combo detected -> initiating safe shutdown.")
+                    self._handle_shutdown_pressed()
+                    return
 
             if event.event_type == EventType.STOP_PRESSED:
                 # Esc: stop speech and the current mode activity without quitting
@@ -516,8 +540,11 @@ class BrailceApp:
             self.config.get("power", "shutdown_hold_seconds", default=2.0)
         )
         pull_up = bool(self.config.get("power", "shutdown_pull_up", default=True))
+        require_backspace = bool(
+            self.config.get("power", "shutdown_requires_backspace", default=False)
+        )
         self.shutdown_button = ShutdownButton(
-            pin=pin, hold_seconds=hold_seconds, pull_up=pull_up
+            pin=pin, hold_seconds=hold_seconds, pull_up=pull_up, require_backspace=require_backspace
         )
         self.shutdown_button.register_callback(self._on_input_event)
         self.shutdown_button.start()
