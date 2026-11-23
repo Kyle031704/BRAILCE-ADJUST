@@ -101,3 +101,7 @@ Desktop.ini
 
 # Speaker level sweep output (tools/make_speaker_sweep.py / speaker_level_sweep.sh)
 speaker_sweep_out/
+
+# Speaker + amplifier + voice output PROOF TEST artifacts (tools/make_proof_signals.py / tools/speaker_amp_proof_test.sh)
+proof_signals/
+speaker_amp_proof_*.txt
