@@ -342,7 +342,7 @@ class SpeechService(SpeechEngine):
             import asyncio
             async def _synth():
                 tmp_mp3 = f"/tmp/female_{slug}.mp3"
-                comm = edge_tts.Communicate(clean, "fil-PH-BlessicaNeural", rate="+3%", pitch="+1Hz")
+                comm = edge_tts.Communicate(clean, "fil-PH-BlessicaNeural", rate="-6%", pitch="+0Hz")
                 await comm.save(tmp_mp3)
                 subprocess.run(
                     ["ffmpeg", "-y", "-i", tmp_mp3, "-ar", "22050", "-ac", "1", cached_wav],
@@ -579,7 +579,7 @@ class SpeechService(SpeechEngine):
 
         behavior = os.getenv("SPEECH_BEHAVIOR", speech_cfg.get("behavior", "character_and_word")).lower()
         voice = speech_cfg.get("model", "en_US-ryan-medium.onnx")
-        rate = int(speech_cfg.get("rate", 160))
+        rate = int(speech_cfg.get("rate", 140))
         volume = int(speech_cfg.get("volume", 100))
         pitch = int(speech_cfg.get("pitch", 50))
         max_queue = int(speech_cfg.get("max_queue_size", 50))

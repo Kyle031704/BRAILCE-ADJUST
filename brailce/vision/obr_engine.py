@@ -757,7 +757,13 @@ class OBREngine:
                 if cands:
                     p_cell = float(np.median(cands))
 
-            x0 = pairs[0][0] if pairs else col_xs[0]
+            if pairs:
+                x0 = pairs[0][0]
+                if col_xs and col_xs[0] < (x0 - 0.4 * p_dot):
+                    n_shifts = int(math.ceil((x0 - col_xs[0] + 0.2 * p_dot) / p_cell))
+                    x0 -= n_shifts * p_cell
+            else:
+                x0 = col_xs[0] if col_xs else 0.0
 
             # Assign each dot to (cell_k, col in {0, 1}, row in {0, 1, 2})
             # Decision boundary between cell k and k+1 is midway between col 1 and next col 0:

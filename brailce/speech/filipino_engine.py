@@ -735,6 +735,8 @@ class FilipinoEngine:
             "nag-iisip mangyaring maghintay": "thinking_fil.wav",
             "nag iisip mangyaring maghintay": "thinking_fil.wav",
             "wikang filipino": "switched_fil.wav",
+            "kumusta ka": "ai_kumusta_ka.wav",
+            "kumusta": "ai_kumusta.wav",
             "malayang paglalagay mag-type ng mga titik at salita": "mode_free_input.wav",
             "matematika mag-type ng mga numero at operasyon": "mode_math.wav",
             "ai assistant mode i-type ang iyong tanong pagkatapos ay pindutin ang enter": "mode_ai.wav",
@@ -808,7 +810,7 @@ class FilipinoEngine:
                 data_dir="",
                 noise_scale=0.333,
                 noise_scale_w=0.4,
-                length_scale=0.95,
+                length_scale=1.06,
             )
             model_config = sherpa_onnx.OfflineTtsModelConfig(
                 vits=vits_config,
@@ -863,7 +865,7 @@ class FilipinoEngine:
                 if not norm_clause:
                     continue
                 # For short single letter names, keep speed slightly crisper to prevent stretching
-                speed_val = 1.05 if len(norm_clause) <= 4 else 1.0
+                speed_val = 1.00 if len(norm_clause) <= 4 else 0.94
                 audio = tts.generate(norm_clause, sid=0, speed=speed_val)
                 if audio is None or len(audio.samples) == 0:
                     continue
@@ -962,16 +964,20 @@ class FilipinoEngine:
                         with wave.open(cached_wav, "rb") as wf:
                             raw_frames = wf.readframes(wf.getnframes())
                         arr = np.frombuffer(raw_frames, dtype=np.int16).copy()
-                        # Clean silence trimming preserving natural onset and release tails
-                        nz = np.where(np.abs(arr) > 100)[0]
+                        # Clean silence trimming preserving natural onset and smooth conversational junctures
+                        peak_val = np.max(np.abs(arr)) if arr.size > 0 else 0
+                        sil_thresh = max(180, int(peak_val * 0.035))
+                        nz = np.where(np.abs(arr) > sil_thresh)[0]
                         if nz.size > 0:
-                            lead_pad = int(framerate * 0.005)
-                            tail_pad = int(framerate * 0.010)
+                            lead_pad = int(framerate * 0.004)
+                            is_internal = (j < len(words) - 1)
+                            tail_pad_ms = 0.006 if is_internal else 0.015
+                            tail_pad = int(framerate * tail_pad_ms)
                             start_idx = max(0, nz[0] - lead_pad)
                             end_idx = min(len(arr), nz[-1] + 1 + tail_pad)
                             trimmed = arr[start_idx:end_idx].copy()
-                            # 8ms cosine fade at edges to prevent clicks without cutting phonemes
-                            mf_len = min(int(framerate * 0.008), len(trimmed) // 4)
+                            # 5ms cosine fade at edges to prevent clicks without cutting phonemes
+                            mf_len = min(int(framerate * 0.005), len(trimmed) // 4)
                             if mf_len > 1:
                                 mf_in = 0.5 * (1.0 - np.cos(np.linspace(0, np.pi, mf_len)))
                                 mf_out = 0.5 * (1.0 + np.cos(np.linspace(0, np.pi, mf_len)))
