@@ -61,6 +61,29 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "Number Mode: OFF",
         "fil": "Modong Numero: Sarado",
     },
+    "NUMBER_MODE_OFF": {
+        "en": "Number Mode: OFF",
+        "fil": "Modong Numero: Sarado",
+    },
+
+    # ---- Battery / Power (real-time battery announcements) ----
+    # Filipino wordings keep the same meaning as the English ones while using
+    # only tokens that resolve to the frozen brailce/audio/filipino word bank
+    # (test_all_filipino_math_i18n_ai_words_have_cached_audio invariant):
+    # "baterya"/"nagcha-charge" have no cached WAV, so the level is phrased as
+    # "{pct} percent remaining" and charging as "{pct} percent, more coming".
+    "BATTERY_AT": {
+        "en": "Battery at {bilang} percent.",
+        "fil": "{bilang} na porsyento na ang natitira.",
+    },
+    "BATTERY_CHARGING": {
+        "en": "Charging. {bilang} percent.",
+        "fil": "{bilang} na porsyento, may dagdag pa.",
+    },
+    "BATTERY_FULL": {
+        "en": "Battery full.",
+        "fil": "Puno na.",
+    },
 
     # ---- Mode Names & Introductions (LCD + Spoken) ----
     "MODE_NAME_FREE_INPUT": {

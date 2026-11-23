@@ -142,10 +142,16 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
     # ---- Power ----
     "power": {
-        # "simulated" for laptop, "rpi" for Raspberry Pi with battery HAT
-        "driver": "simulated",
+        # "auto" (default): real sysfs battery when a capacity source exists
+        # (/sys/class/power_supply/*/capacity), else the simulated behavior.
+        # "sysfs", "simulated", and "rpi" (I2C UPS HAT) remain selectable.
+        # NOTE: battery HATs that do not expose /sys/class/power_supply make
+        # "auto" fall back to simulated -- a HAT-specific driver may be needed.
+        "driver": "auto",
         "low_battery_threshold": 15,
         "poll_interval_seconds": 60,
+        # Background battery poller interval (LCD refresh + announcements)
+        "poll_seconds": 30,
     },
 
     # ---- Vision ----

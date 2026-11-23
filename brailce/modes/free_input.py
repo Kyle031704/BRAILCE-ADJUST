@@ -122,7 +122,7 @@ class FreeInputMode(BaseMode):
                 self.state.append_character(digit)
                 self.state.update_braille_info(dots_str, unicode_char)
                 if self.app.display:
-                    self.app.display.show_character(f"{digit} (from {char_upper})")
+                    self.app.display.show_character(f"{digit} (from {char_upper.lower()})")
                     self.app.display.show_braille(unicode_char, dots_str, visual)
                     self.app.display.show_text_buffer(self.state.text_buffer)
                 if self.app.speech and self.app.config.get("speech", "speak_each_character", default=True):
@@ -152,7 +152,7 @@ class FreeInputMode(BaseMode):
 
         # 2. Display update
         if self.app.display:
-            self.app.display.show_character(mapping.display_label)
+            self.app.display.show_character(mapping.display_label.lower())
             self.app.display.show_braille(
                 mapping.braille_unicode,
                 mapping.dots_string(),
@@ -249,7 +249,7 @@ class FreeInputMode(BaseMode):
         self.state.clear_buffer()
 
         if self.app.display:
-            self.app.display.show_status(f"Spoken: \"{query}\"")
+            self.app.display.show_status(f"Spoken: \"{query.lower()}\"")
             self.app.display.show_text_buffer("")
 
     def _handle_backspace(self) -> None:

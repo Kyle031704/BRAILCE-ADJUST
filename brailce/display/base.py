@@ -87,6 +87,13 @@ class DisplayDevice(abc.ABC):
         """Close or clear the camera viewfinder/preview window."""
         pass
 
+    def show_battery(self, percentage, charging: bool = False) -> None:
+        """
+        Display a small, non-intrusive battery percentage indicator
+        (e.g. "75%"). Default no-op for displays without battery support.
+        """
+        pass
+
     def set_language(self, language: str) -> None:
         """Set display language ('en' or 'fil'). Default no-op."""
         pass

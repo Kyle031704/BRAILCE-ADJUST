@@ -52,7 +52,9 @@ class TestConsoleDisplay:
         
         captured = capsys.readouterr()
         assert "[TEXT BUFFER]" in captured.out
-        assert "HELLO" in captured.out
+        # Typed content renders lowercase at the display layer (FIX 1)
+        assert "hello" in captured.out
+        assert "HELLO" not in captured.out
 
     def test_show_text_buffer_empty(self, display: ConsoleDisplay, capsys) -> None:
         display.show_text_buffer("")

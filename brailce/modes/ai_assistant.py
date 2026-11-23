@@ -153,7 +153,7 @@ class AIAssistantMode(BaseMode):
 
         self.state.append_ai_character(character)
         if self.app.display:
-            self.app.display.show_character("Space" if character == " " else character)
+            self.app.display.show_character("Space" if character == " " else character.lower())
             self.app.display.show_text_buffer(self.state.ai_query_buffer)
         if self.app.speech:
             if character == " ":

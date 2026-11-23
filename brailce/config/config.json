@@ -80,7 +80,8 @@
     },
 
     "power": {
-        "driver": "simulated"
+        "driver": "auto",
+        "poll_seconds": 30
     },
     
     "vision": {

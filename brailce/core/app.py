@@ -38,6 +38,7 @@ from brailce.modes.free_input import FreeInputMode
 from brailce.modes.math_mode import MathMode
 from brailce.modes.scanner_mode import ScannerMode
 from brailce.power.base import PowerMonitor
+from brailce.power.poller import BatteryPoller
 from brailce.power.simulated import SimulatedPowerMonitor
 from brailce.speech.base import SpeechEngine
 from brailce.speech.espeak_engine import EspeakEngine
@@ -69,6 +70,7 @@ class BrailceApp:
         self.speech: Optional[SpeechEngine] = None
         self.sound = None
         self.power: Optional[PowerMonitor] = None
+        self.battery_poller: Optional[BatteryPoller] = None
         self.camera: Optional[CameraDevice] = None
         self.obr: Optional[OBREngine] = None
         self.mapping_service: Optional[BrailleMappingService] = None
@@ -156,12 +158,23 @@ class BrailceApp:
             self.ai_client = None
 
         # ---- Power ----
-        import sys
-        if sys.platform != "win32":
+        # Driver is config-driven: "auto" (default) uses the real sysfs
+        # battery driver when a capacity source exists, else the simulated
+        # behavior. "sysfs" / "simulated" / "rpi" (I2C UPS HAT) stay
+        # explicitly selectable.
+        power_driver = str(self.config.get("power", "driver", default="auto")).lower()
+        if power_driver == "sysfs":
+            from brailce.power.sysfs import SysfsPowerMonitor
+            self.power = SysfsPowerMonitor()
+        elif power_driver == "simulated":
+            self.power = SimulatedPowerMonitor()
+        elif power_driver == "rpi":
             from brailce.power.rpi_power import PiPowerMonitor
             self.power = PiPowerMonitor()
-        else:
-            self.power = SimulatedPowerMonitor()
+        else:  # "auto": sysfs when a real capacity source exists, else simulated
+            from brailce.power.auto import AutoPowerMonitor
+            self.power = AutoPowerMonitor()
+        logger.info("Power: initialized %s.", self.power.driver_name)
 
         if hasattr(self.display, "set_power_monitor"):
             self.display.set_power_monitor(self.power)
@@ -236,6 +249,20 @@ class BrailceApp:
         if self.speech:
             self.speech.speak_mode_intro(self.state.mode, interrupt=False)
 
+        # ---- Battery poller (after speech/display init) ----
+        # Daemon thread: refreshes the LCD battery indicator and makes
+        # non-interrupting voice announcements (75/50/25 crossings, charging
+        # start, full) following the current app language.
+        poll_seconds = float(self.config.get("power", "poll_seconds", default=30))
+        self.battery_poller = BatteryPoller(
+            monitor=self.power,
+            display=self.display,
+            speech=self.speech,
+            state=self.state,
+            poll_seconds=poll_seconds,
+        )
+        self.battery_poller.start()
+
         logger.info("Brailce application setup complete.")
         logger.info(
             "Input: %s | Display: %s | Speech: %s",
@@ -277,6 +304,12 @@ class BrailceApp:
         """Gracefully shut down all subsystems."""
         logger.info("Brailce shutting down...")
         self.state.is_running = False
+
+        if self.battery_poller is not None:
+            try:
+                self.battery_poller.stop()
+            except Exception:
+                logger.exception("Error stopping battery poller.")
 
         if self.input_device:
             try:

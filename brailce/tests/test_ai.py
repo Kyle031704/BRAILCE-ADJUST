@@ -92,7 +92,7 @@ class TestAIAssistantMode:
         ai_mode.handle_event(event)
         
         mock_app.state.append_ai_character.assert_called_once_with("A")
-        mock_app.display.show_character.assert_called_once_with("A")
+        mock_app.display.show_character.assert_called_once_with("a")
         mock_app.speech.speak_character.assert_called_once_with("A")
 
     def test_handle_space(self, ai_mode: AIAssistantMode, mock_app: BrailceApp) -> None:

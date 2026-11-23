@@ -131,7 +131,7 @@ class MathMode(BaseMode):
         # 3. Update display
         if self.app.display:
             label = mapping.display_label if mapping else character
-            self.app.display.show_character(label)
+            self.app.display.show_character(label.lower())
             if mapping:
                 self.app.display.show_braille(
                     mapping.braille_unicode,

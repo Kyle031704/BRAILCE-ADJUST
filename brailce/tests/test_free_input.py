@@ -64,8 +64,8 @@ class TestFreeInputMode:
         mock_app.state.append_character.assert_called_once_with("A")
         mock_app.state.update_braille_info.assert_called_once_with("Dot 1", "⠁")
         
-        # 3. Check display updated
-        mock_app.display.show_character.assert_called_once_with("A")
+        # 3. Check display updated (typed character renders lowercase)
+        mock_app.display.show_character.assert_called_once_with("a")
         mock_app.display.show_braille.assert_called_once()
         mock_app.display.show_text_buffer.assert_called_once_with("A")
         
@@ -141,7 +141,7 @@ class TestFreeInputMode:
 
         mock_app.state.append_character.assert_called_once_with("1")
         mock_app.speech.speak_character.assert_called_once_with("1")
-        mock_app.display.show_character.assert_called_once_with("1 (from A)")
+        mock_app.display.show_character.assert_called_once_with("1 (from a)")
 
     def test_space_terminates_number_mode(self, free_input_mode: FreeInputMode, mock_app: BrailceApp) -> None:
         """Pressing space in number mode resets it back to letter mode."""

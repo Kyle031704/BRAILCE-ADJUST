@@ -52,6 +52,7 @@ class ConsoleDisplay(DisplayDevice):
         self._use_colors = use_colors and self._supports_color()
         self._current_mode: Optional[AppMode] = None
         self._last_cam_print: float = 0.0
+        self._last_battery_label: Optional[str] = None
         self._language: str = "en"
 
     def set_language(self, language: str) -> None:
@@ -128,10 +129,23 @@ class ConsoleDisplay(DisplayDevice):
                 print(f"    {colored_row}")
 
     def show_text_buffer(self, text: str) -> None:
+        # Typed content renders in lowercase at the display layer so every
+        # mode benefits; labels/placeholders are not affected.
         c = self._c()
-        display_text = text if text else "(empty)"
+        display_text = text.lower() if text else "(empty)"
         cursor = f"{c.GOLD}█{c.RESET}" if text else ""
         print(f"{c.GREEN}{c.BOLD}[TEXT BUFFER]{c.RESET} {c.WHITE}{display_text}{cursor}{c.RESET}")
+
+    def show_battery(self, percentage, charging: bool = False) -> None:
+        """Small battery indicator line, refreshed by the background poller."""
+        if not isinstance(percentage, int):
+            return
+        label = f"{percentage}%+" if charging else f"{percentage}%"
+        if label == self._last_battery_label:
+            return
+        self._last_battery_label = label
+        c = self._c()
+        print(f"{c.CYAN}{c.BOLD}[BATTERY]{c.RESET} {c.GREEN}{c.BOLD}{label}{c.RESET}")
 
     def show_status(self, message: str) -> None:
         c = self._c()
@@ -144,7 +158,7 @@ class ConsoleDisplay(DisplayDevice):
     def show_ai_response(self, response: str, query: Optional[str] = None) -> None:
         c = self._c()
         if query:
-            print(f"{c.GREEN}{c.BOLD}[AI QUERY]{c.RESET} {query}")
+            print(f"{c.GREEN}{c.BOLD}[AI QUERY]{c.RESET} {query.lower()}")
         print(f"{c.GREEN}{c.BOLD}[AI RESPONSE]{c.RESET} {c.WHITE}{response}{c.RESET}")
         print(f"\n{c.VIOLET}{c.BOLD}╭── [ AI ASSISTANT ANSWER ] ─────────────────────────────────╮{c.RESET}")
         print(f"│  {c.WHITE}{response}{c.RESET}")
@@ -152,7 +166,7 @@ class ConsoleDisplay(DisplayDevice):
 
     def show_ai_processing(self, query: Optional[str] = None) -> None:
         c = self._c()
-        msg = f"Processing query: {query}" if query else "Processing... please wait."
+        msg = f"Processing query: {query.lower()}" if query else "Processing... please wait."
         print(f"{c.GREEN}{c.BOLD}[AI]{c.RESET} {c.GOLD}{msg}{c.RESET}")
 
     def show_math_result(
@@ -170,7 +184,8 @@ class ConsoleDisplay(DisplayDevice):
         lbl_st = get_string("MATH_LABEL_STEPS", language)
         lbl_ex = get_string("MATH_LABEL_EXPLANATION", language)
         print(f"\n{c.CYAN}{c.BOLD}══════════ {title} ══════════{c.RESET}")
-        print(f"{c.GREEN}{c.BOLD}{lbl_eq:<11}:{c.RESET} {c.YELLOW}{equation} = {result}{c.RESET}")
+        eq_display = equation.lower() if equation else equation
+        print(f"{c.GREEN}{c.BOLD}{lbl_eq:<11}:{c.RESET} {c.YELLOW}{eq_display} = {result}{c.RESET}")
         if short_step:
             print(f"{c.GREEN}{c.BOLD}{lbl_st:<11}:{c.RESET} {c.YELLOW}{short_step}{c.RESET}")
         print(f"{c.GREEN}{c.BOLD}{lbl_ex:<11}:{c.RESET} {c.YELLOW}{explanation}{c.RESET}")

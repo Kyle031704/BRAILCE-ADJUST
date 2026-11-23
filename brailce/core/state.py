@@ -69,6 +69,11 @@ class ApplicationState:
     # Language state ("en" or "fil")
     language: str = "en"
 
+    # Battery state (mirrored continuously by the background battery poller;
+    # None when the power driver reports no data)
+    battery_percentage: Optional[int] = None
+    battery_charging: Optional[bool] = None
+
     # System
     error_message: Optional[str] = None
     is_running: bool = True

@@ -98,6 +98,7 @@ class ILI9488Display(DisplayDevice):
         self._init_error = None
         self._display_lock = threading.Lock()
         self._power_monitor: Optional[Any] = None
+        self._battery_override: Optional[tuple[int, bool]] = None
         self._current_query: str = ""
         self._last_status_msg: str = "Ready"
 
@@ -285,6 +286,9 @@ class ILI9488Display(DisplayDevice):
 
     def _get_battery_info(self) -> tuple[int, bool]:
         """Fetch battery percentage and plugged/charging state."""
+        if self._battery_override is not None:
+            pct, charging = self._battery_override
+            return max(0, min(100, int(pct))), bool(charging)
         if self._power_monitor:
             try:
                 status = self._power_monitor.get_status()
@@ -294,6 +298,19 @@ class ILI9488Display(DisplayDevice):
             except Exception:
                 pass
         return 100, True  # Default: 100% plugged directly into power supply
+
+    def show_battery(self, percentage, charging: bool = False) -> None:
+        """
+        Refresh the header battery widget ("75%" / "75%+") with the value
+        polled by the background battery poller. Small and non-intrusive:
+        only the header band is redrawn.
+        """
+        if not isinstance(percentage, int):
+            return
+        self._battery_override = (max(0, min(100, percentage)), bool(charging))
+        if self._draw and self._current_mode is not None:
+            self._draw_header(self._current_mode)
+            self._flush_to_hardware()
 
     def _draw_header(self, mode: AppMode) -> None:
         """
@@ -452,7 +469,9 @@ class ILI9488Display(DisplayDevice):
         self._draw.rectangle([(15, 185), (465, 276)], fill=(15, 23, 42), outline=(51, 65, 85), width=1)
         self._draw.text((25, 195), "ACCUMULATED SENTENCE BUFFER:", fill=(148, 163, 184))
 
-        buf_display = text if text else "(Empty - type letters to practice)"
+        # Typed content renders in lowercase at the display layer so every
+        # mode benefits; the empty-state placeholder is a label and stays as-is.
+        buf_display = text.lower() if text else "(Empty - type letters to practice)"
         lines = textwrap.wrap(buf_display, width=44)
         y = 220
         for line in lines[:2]:
@@ -476,6 +495,8 @@ class ILI9488Display(DisplayDevice):
         if not self._draw:
             return
         import textwrap
+        # Typed query content renders lowercase (display layer, all modes).
+        query = (query or "").lower()
         self._current_query = query
 
         # Clear working canvas
@@ -517,7 +538,7 @@ class ILI9488Display(DisplayDevice):
         # Question header
         self._draw.rectangle([(15, 56), (465, 130)], fill=(15, 23, 42), outline=(139, 92, 246), width=1)
         self._draw.text((25, 66), "QUESTION:", fill=(192, 132, 252))
-        q_text = query or (self._current_query or "...")
+        q_text = (query or (self._current_query or "...")).lower()
         q_lines = textwrap.wrap(q_text, width=44)
         for i, line in enumerate(q_lines[:2]):
             self._draw.text((25, 88 + i * 18), line, fill=(255, 255, 255))
@@ -546,7 +567,7 @@ class ILI9488Display(DisplayDevice):
         self._draw.text((25, 64), "QUESTION:", fill=(148, 163, 184))
         q_text = query or self._current_query
         if q_text:
-            self._draw.text((25, 84), q_text[:48], fill=(255, 255, 255))
+            self._draw.text((25, 84), q_text.lower()[:48], fill=(255, 255, 255))
         else:
             self._draw.text((25, 84), "(Student Query)", fill=(203, 213, 225))
 
@@ -595,7 +616,8 @@ class ILI9488Display(DisplayDevice):
         # Solution card (fits 480x320 cleanly with multi-line wrapping)
         self._draw.rectangle([(15, 56), (465, 276)], fill=(15, 23, 42), outline=(245, 158, 11), width=2)
         self._draw.text((25, 62), f"{title}:", fill=(251, 191, 36))
-        self._draw.text((25, 84), f"{lbl_eq}: {equation} = {result}", fill=(255, 255, 255))
+        eq_display = equation.lower() if equation else equation
+        self._draw.text((25, 84), f"{lbl_eq}: {eq_display} = {result}", fill=(255, 255, 255))
 
         y_next = 106
         if short_step:
@@ -611,7 +633,7 @@ class ILI9488Display(DisplayDevice):
             self._draw.text((25, y), line, fill=(226, 232, 240))
             y += 17
 
-        self.show_status(f"{equation} = {result}")
+        self.show_status(f"{eq_display} = {result}")
         self._flush_to_hardware()
 
     # -------------------------------------------------------------------------
