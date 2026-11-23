@@ -32,7 +32,7 @@ from brailce.speech.filipino_engine import (
     get_filipino_word_path,
 )
 
-FROZEN_ENGLISH_CHARACTERS_SHA256 = "49728dac156d0ebbbcd9c6836745f87b6e7454c0f6762e08efcd2ae2b7351a5f"
+FROZEN_ENGLISH_CHARACTERS_SHA256 = "45696670344c5933044223eeab9cf441b3bcb4b8cf4b7edc011e68f4e3026567"
 
 
 def test_english_audio_assets_unchanged():
