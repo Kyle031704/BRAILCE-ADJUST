@@ -590,7 +590,7 @@ class ScannerMode(BaseMode):
                 if prev_word_idx is not None and (word_idx != prev_word_idx or line_idx != prev_line_idx):
                     if cur_word:
                         self._stop_readout_event.wait(self._get_word_pause_s())
-                        self._speak_completed_word(cur_word, False)
+                        self._speak_completed_word(cur_word, cur_has_unknown)
                     cur_word = []
                     cur_has_unknown = False
                     pause = self.LINE_PAUSE_S if (prev_line_idx is not None and line_idx != prev_line_idx) else self._get_word_pause_s()
@@ -622,7 +622,7 @@ class ScannerMode(BaseMode):
                         except Exception:
                             pass
 
-                if kind == "unknown" or ch == "?" or not ch.strip():
+                if kind == "unknown" or not ch.strip():
                     cur_has_unknown = True
                     if speech:
                         speech.speak_text(get_string("SCANNER_UNKNOWN_CELL", lang), interrupt=False)
