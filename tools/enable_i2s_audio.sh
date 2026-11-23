@@ -41,22 +41,22 @@ else
     echo -e "${GREEN}✓ Added dtoverlay=hifiberry-dac and dtparam=i2s=on successfully!${NC}"
 fi
 
-# Configure default ALSA sound card for I2S DAC
-cat <<EOF > "$HOME/.asoundrc"
-pcm.!default {
-    type plug
-    slave.pcm {
-        type hw
-        card sndrpihifiberry
-        device 0
-    }
-}
-ctl.!default {
-    type hw
-    card sndrpihifiberry
-}
-EOF
-echo -e "${GREEN}✓ Configured ~/.asoundrc for sndrpihifiberry${NC}"
+# ALSA route: match the reference repo - BRAILCE-TYPING-AND-AI-ONLY writes NO
+# ~/.asoundrc at all (the Pi system default already routes to the I2S DAC once
+# the overlay is active). Back up and REMOVE any custom ALSA config left by
+# earlier Brailce scripts so the device runs the system-default route too.
+STAMP="$(date +%Y%m%d)"
+for ALSA_FILE in "$HOME/.asoundrc" "/etc/asound.conf"; do
+    if [ -f "$ALSA_FILE" ]; then
+        if [ "$ALSA_FILE" = "/etc/asound.conf" ]; then
+            sudo mv "$ALSA_FILE" "${ALSA_FILE}.bak.${STAMP}"
+        else
+            mv "$ALSA_FILE" "${ALSA_FILE}.bak.${STAMP}"
+        fi
+        echo -e "${GREEN}✓ Backed up ${ALSA_FILE} -> ${ALSA_FILE}.bak.${STAMP}${NC}"
+    fi
+done
+echo -e "${GREEN}✓ No ~/.asoundrc written - system default ALSA route (reference behavior).${NC}"
 
 echo ""
 echo -e "${GREEN}==================================================================${NC}"

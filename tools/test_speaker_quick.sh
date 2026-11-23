@@ -32,27 +32,30 @@ else
     echo -e "${GREEN}I2S DAC detected on card ${DAC_CARD} (direct route: plughw:${DAC_CARD},0)${NC}"
 fi
 
-# [b] Effective ALSA configs actually used by the app route
+# [b] Effective ALSA configs (the reference route has NONE - system default)
 echo ""
-echo -e "${YELLOW}[2/6] Effective ~/.asoundrc:${NC}"
+echo -e "${YELLOW}[2/6] Effective ~/.asoundrc (should be NONE - reference route):${NC}"
 if [ -f "$HOME/.asoundrc" ]; then
     cat "$HOME/.asoundrc"
+    echo -e "${RED}NOTE: custom ~/.asoundrc present (NOT the reference route) - re-run tools/fix_buzzing_audio.sh to remove it.${NC}"
 else
-    echo -e "${RED}(no ~/.asoundrc)${NC}"
+    echo -e "${GREEN}(no ~/.asoundrc - system default route, reference behavior)${NC}"
 fi
 echo ""
-echo -e "${YELLOW}       Effective /etc/asound.conf:${NC}"
+echo -e "${YELLOW}       Effective /etc/asound.conf (should be NONE - reference route):${NC}"
 if [ -f /etc/asound.conf ]; then
     cat /etc/asound.conf
+    echo -e "${RED}NOTE: custom /etc/asound.conf present (NOT the reference route) - re-run tools/fix_buzzing_audio.sh to remove it.${NC}"
 else
-    echo -e "${RED}(no /etc/asound.conf)${NC}"
+    echo -e "${GREEN}(no /etc/asound.conf - system default route, reference behavior)${NC}"
 fi
 
 # [c] Mixer controls
 echo ""
 echo -e "${YELLOW}[3/6] ALSA mixer controls (amixer scontrols):${NC}"
 amixer scontrols 2>/dev/null || echo "(amixer not available)"
-echo -e "${YELLOW}       NOTE: the softvol Master control appears only while the default PCM is open (during playback).${NC}"
+echo -e "${YELLOW}       NOTE: the reference route has no software volume control - loudness is mastered${NC}"
+echo -e "${YELLOW}       in the WAV bank (tools/set_bank_level.py) + speech config volume.${NC}"
 
 # [d] Configured app volume
 echo ""
@@ -72,7 +75,7 @@ for TEST_FILE in "$CHAR_FILE" "$WORD_FILE"; do
         continue
     fi
     echo -e "${BLUE}--- ${TEST_FILE} ---${NC}"
-    echo -e "${YELLOW}App route (default -> softvol -> dmixer):${NC}"
+    echo -e "${YELLOW}App route (ALSA system default - reference route):${NC}"
     if aplay -q "$TEST_FILE"; then
         echo -e "${GREEN}  played via default route${NC}"
     else
@@ -92,9 +95,9 @@ done
 echo ""
 echo -e "${BLUE}==================================================================${NC}"
 echo -e "${GREEN}How to read this result / Paano basahin:${NC}"
-echo "  1. App route (default) basag, direct route clean -> the ~/.asoundrc /"
-echo "     /etc/asound.conf dmixer+softvol chain is the problem (re-run"
-echo "     tools/fix_buzzing_audio.sh to rewrite it)."
+echo "  1. App route (default) basag, direct route clean -> a leftover custom"
+echo "     ~/.asoundrc or /etc/asound.conf is overriding the system default"
+echo "     (re-run tools/fix_buzzing_audio.sh to remove it)."
 echo "  2. BOTH routes basag -> hardware cause: MAX98357A gain pin, 5V supply,"
 echo "     speaker wiring, or volume set too high."
 echo "  3. Both routes clean but the APP sounds basag -> report WHICH sound is"

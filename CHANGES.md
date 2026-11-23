@@ -278,3 +278,22 @@ The remaining "basag" is level-driven: the active-RMS-4200 / peak-30000 bank ove
 
 #### VERIFIED
 py_compile OK for every new/changed .py; `bash -n tools/speaker_level_sweep.sh` OK; smoke run into a temp dir OUTSIDE the repo produced 23 WAVs with every peak EXACTLY on target (temp dir deleted, no WAVs committed); `python tools/verify_playback_chain.py` still passes the current bank (853 WAVs, band 2100-9240 derived from T=4200); `set_bank_level.py --peak 10000 --dry-run` projects 853 files / median active RMS 2574 / new TARGET 2600 with zero writes; pytest (playback chain, english frozen, filipino tts v2, configuration, audio audit, filipino keystrokes): 78 passed / 1 pre-existing failure (missing enye keystroke WAV, documented since JOB 2).
+
+---
+
+### Section G — Match Reference Audio Output Exactly (2026-11-23)
+
+#### WHY
+The reference repo (BRAILCE-TYPING-AND-AI-ONLY) is loud and clean on the same MAX98357A / sndrpihifiberry hardware, while ADJUST measured clean only at peak 4000 and basag from peak 6000 up. Measuring the reference bank directly (numpy+wave, active frames above 500) shows median peak 16692 / max 31129 — far ABOVE the ADJUST device's 6000 distortion threshold — proving the bank level was never the cause; the custom ALSA route was. The reference configures NO ~/.asoundrc, NO /etc/asound.conf, NO amixer, and NO dtoverlay anywhere: plain `aplay -q` through the Pi system default.
+
+#### FIXES
+- Bank re-mastered to the reference's measured levels with ONE uniform linear scale k = P_reference/current_median_peak = 16692/17894 = 0.932799 (set_bank_level semantics: linear scale only, 22050/mono/16-bit preserved, ±32767 clip guard, atomic writes). Achieved median peak 16692 (exact) and median active RMS 3918 (-8.6% vs the reference's 4286, inside the ±25% criterion); the bank stays RMS-tight (3744..4043 p10..p90) like the reference (4050..4831) instead of peak-uniform re-mastering which would spread per-file RMS 0.63..2.05x. `TARGET_ACTIVE_RMS` re-baselined 4200 -> 3900; `english_audio_manifest.sha256` + `FROZEN_ENGLISH_CHARACTERS_SHA256` regenerated.
+- `tools/fix_buzzing_audio.sh` + `tools/apply_voice_upgrade.sh`: instead of writing the plug -> softvol "Master" -> dmixer 44.1 kHz stereo chain, they now back up (`mv` to `*.bak.<date>`) and REMOVE `~/.asoundrc` + `/etc/asound.conf`, leaving the system default — with an honest echo that the device now runs the reference's route. `apply_voice_upgrade.sh`'s softvol-driven amixer/pactl volume block removed (the reference sets no ALSA mixer); its `REAL_USER`/`USER_HOME` chain-writing helpers removed with it.
+- `tools/enable_i2s_audio.sh`: overlay lines unchanged (the reference specifies none); its plug -> hw `~/.asoundrc` write replaced by the same backup-and-remove (system default route).
+- `tools/fix_audio.sh` + `tools/test_and_fix_voice.sh`: their card-pinned `~/.asoundrc` writes replaced by the same backup-and-remove; detection echoes now truthful ("system default decides the route").
+- `tools/test_speaker_quick.sh`: route labels truthful — App route = "ALSA system default - reference route"; NO ~/.asoundrc and NO /etc/asound.conf is now the GREEN expected state (a present custom file gets a RED warning to re-run tools/fix_buzzing_audio.sh); the softvol note replaced by the bank-mastered-loudness note.
+- `brailce/config/config.json` + `brailce/config/defaults.py`: `filipino_pitch_semitones` 0.0 -> 3.5 (reference value; `service.py` code defaults already matched). English voice keys untouched.
+- `brailce/speech/audio_device.py` + `audio_normalize.py`: docstrings only (playback = system default route like the reference; set_volume = best-effort amixer no-op without a Master control; TARGET_ACTIVE_RMS docstring now references the re-baselined constant). No behavior change: default-first `aplay -q` remains primary (reference behavior); the single plughw retry stays failure-only.
+
+#### VERIFIED
+`tools/verify_playback_chain.py` PASS over all 853 WAVs (22050/mono/16-bit, active RMS 1950-8580 derived from TARGET_ACTIVE_RMS=3900, peak <= 30000, no clipped samples, 0 np.repeat); pytest (playback chain, english frozen, filipino tts v2 frozen hash, configuration): 27 passed / 1 failed — only the pre-existing missing enye keystroke `char_ñ.wav` (documented since JOB 2); `bash -n` clean on all six changed .sh scripts. Deploy: re-run `bash tools/fix_buzzing_audio.sh` on the device (backs up + removes the old custom ALSA files), then `sudo systemctl restart brailce.service`.

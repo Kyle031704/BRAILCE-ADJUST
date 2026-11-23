@@ -17,62 +17,33 @@ echo ""
 
 cd "$HOME/BRAILCE-ADJUST"
 
-# 1. Canonical ALSA output chain for the I2S DAC:
-#    !default (plug) -> softvol "Master" -> dmixer (44.1 kHz stereo) -> hw DAC.
-#    - dmix opens the card at 44100 Hz / 2 channels, so every playback (including
-#      22050 Hz bank files, rate-converted by `plug`) locks 44.1 kHz stereo /
-#      1.411 MHz BCLK instead of the hardware following each file's rate.
-#    - softvol provides the "Master" control that brailce/speech/audio_device.py
-#      uses (`amixer sset Master`) for the volume keys / config volume.
-#    NOTE: the softvol "Master" control exists only while the default PCM is open
-#    (i.e. during playback) - amixer on it is best-effort until then.
-echo -e "${YELLOW}[1/4] Configuring ALSA output chain (plug -> softvol Master -> dmixer 44.1kHz stereo -> hw)...${NC}"
+# 1. Match the reference repo (BRAILCE-TYPING-AND-AI-ONLY) ALSA route.
+#    The reference writes NO ~/.asoundrc and NO /etc/asound.conf anywhere:
+#    every sound plays through the Pi system default route (plain `aplay -q`).
+#    On this hardware the reference bank (median peak 16692) played LOUD and
+#    CLEAN on the same MAX98357A / sndrpihifiberry DAC, while our custom
+#    plug -> softvol "Master" -> dmixer 44.1 kHz stereo chain measured basag
+#    from peak ~6000 up. So instead of writing any chain, back up and REMOVE
+#    the custom ALSA files and leave the system default (reference behavior).
+echo -e "${YELLOW}[1/4] Restoring the reference ALSA route (system default - removing custom ~/.asoundrc + /etc/asound.conf)...${NC}"
 
-DAC_CARD=$(aplay -l 2>/dev/null | grep -iE "dac|hifiberry|i2s|max98357" | head -n1 | sed -n 's/card \([0-9]\):.*/\1/p' || true)
-if [ -z "$DAC_CARD" ]; then
-    DAC_CARD="sndrpihifiberry"
-fi
+STAMP="$(date +%Y%m%d)"
+for ALSA_FILE in "$HOME/.asoundrc" "/etc/asound.conf"; do
+    if [ -f "$ALSA_FILE" ]; then
+        if [ "$ALSA_FILE" = "/etc/asound.conf" ]; then
+            sudo mv "$ALSA_FILE" "${ALSA_FILE}.bak.${STAMP}"
+        else
+            mv "$ALSA_FILE" "${ALSA_FILE}.bak.${STAMP}"
+        fi
+        echo -e "${GREEN}✓ Backed up ${ALSA_FILE} -> ${ALSA_FILE}.bak.${STAMP}${NC}"
+    fi
+done
 
-ASOUND_CHAIN=$(cat <<EOF
-pcm.dmixer {
-    type dmix
-    ipc_key 1024
-    ipc_perm 0666
-    slave {
-        pcm "hw:${DAC_CARD},0"
-        period_time 0
-        period_size 1024
-        buffer_size 8192
-        rate 44100
-        channels 2
-    }
-    bindings { 0 0; 1 1 }
-}
-pcm.softvol {
-    type softvol
-    slave.pcm "dmixer"
-    control { name "Master" }
-}
-pcm.!default {
-    type plug
-    slave.pcm "softvol"
-}
-ctl.!default {
-    type hw
-    card ${DAC_CARD}
-}
-EOF
-)
+echo -e "${GREEN}✓ No custom ALSA config is written anymore - the device now runs the reference's route:${NC}"
+echo -e "${GREEN}  the ALSA system default (plain aplay -q), exactly like BRAILCE-TYPING-AND-AI-ONLY.${NC}"
+echo -e "${GREEN}  Loudness is mastered in the WAV bank (tools/set_bank_level.py) + speech config volume.${NC}"
 
-printf '%s\n' "$ASOUND_CHAIN" > "$HOME/.asoundrc"
-# The systemd service runs as root, so it reads the system-wide file.
-printf '%s\n' "$ASOUND_CHAIN" | sudo tee /etc/asound.conf > /dev/null
-
-echo -e "${GREEN}✓ ALSA chain written to ~/.asoundrc AND /etc/asound.conf (card: ${DAC_CARD}).${NC}"
-echo -e "${GREEN}  Playback route: default (plug) -> softvol Master -> dmixer 44.1 kHz stereo -> hw DAC.${NC}"
-echo -e "${GREEN}  44.1 kHz stereo lock = 1.411 MHz BCLK; volume via softvol Master (amixer sset Master).${NC}"
-
-# 3. Activate venv & generate clean 44.1kHz stereo audio assets
+# 3. Activate venv & voice assets (bank stays 22050 Hz mono 16-bit)
 echo -e "${YELLOW}[3/4] Voice assets (regeneration only when BRAILCE_REGEN_VOICE=1)...${NC}"
 if [ -f "$HOME/venv/bin/activate" ]; then
     source "$HOME/venv/bin/activate"

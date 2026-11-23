@@ -18,36 +18,33 @@ echo -e "${BLUE}================================================================
 echo -e "${YELLOW}[1/6] Scanning detected audio cards...${NC}"
 aplay -l || true
 
-# Look for USB Audio or I2S DAC
+# Look for USB Audio or I2S DAC (detection only - the reference repo writes no
+# ~/.asoundrc; the Pi system default decides the route).
 USB_CARD=$(aplay -l 2>/dev/null | grep -iE "usb|audio|codec" | head -n1 | sed -n 's/card \([0-9]\):.*/\1/p' || true)
 DAC_CARD=$(aplay -l 2>/dev/null | grep -iE "dac|hifiberry|i2s|max98357" | head -n1 | sed -n 's/card \([0-9]\):.*/\1/p' || true)
 
-TARGET_CARD=""
 if [ -n "$USB_CARD" ]; then
-    TARGET_CARD="$USB_CARD"
-    echo -e "${GREEN}Detected USB Audio at card $TARGET_CARD! Configuring as default...${NC}"
+    echo -e "${GREEN}Detected USB Audio at card $USB_CARD (system default decides the route).${NC}"
 elif [ -n "$DAC_CARD" ]; then
-    TARGET_CARD="$DAC_CARD"
-    echo -e "${GREEN}Detected I2S DAC at card $TARGET_CARD! Configuring as default...${NC}"
+    echo -e "${GREEN}Detected I2S DAC at card $DAC_CARD (system default decides the route).${NC}"
 fi
 
-if [ -n "$TARGET_CARD" ]; then
-    cat <<EOF > "$HOME/.asoundrc"
-pcm.!default {
-    type plug
-    slave.pcm {
-        type hw
-        card $TARGET_CARD
-        device 0
-    }
-}
-ctl.!default {
-    type hw
-    card $TARGET_CARD
-}
-EOF
-    echo -e "${GREEN}Configured ~/.asoundrc with 'type plug' for card $TARGET_CARD${NC}"
-fi
+# ALSA route: back up and REMOVE any custom ALSA config so the device runs the
+# reference repo's system-default route (BRAILCE-TYPING-AND-AI-ONLY writes none).
+echo -e "${YELLOW}Restoring the reference ALSA route (system default)...${NC}"
+STAMP="$(date +%Y%m%d)"
+for ALSA_FILE in "$HOME/.asoundrc" "/etc/asound.conf"; do
+    if [ -f "$ALSA_FILE" ]; then
+        if [ "$ALSA_FILE" = "/etc/asound.conf" ]; then
+            sudo mv "$ALSA_FILE" "${ALSA_FILE}.bak.${STAMP}"
+        else
+            mv "$ALSA_FILE" "${ALSA_FILE}.bak.${STAMP}"
+        fi
+        echo -e "${GREEN}✓ Backed up ${ALSA_FILE} -> ${ALSA_FILE}.bak.${STAMP}${NC}"
+    fi
+done
+echo -e "${GREEN}✓ System default ALSA route active (reference behavior - no custom config written).${NC}"
+
 
 # 2. Unmute Audio Controls
 echo -e "${YELLOW}[2/6] Unmuting all audio channels to 100%...${NC}"

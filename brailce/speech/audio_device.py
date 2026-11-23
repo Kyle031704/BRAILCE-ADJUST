@@ -72,9 +72,10 @@ class AudioDeviceCoordinator:
 
     Playback and volume policy:
     - Non-Windows playback opens the ALSA *default* device first
-      (``aplay -q <file.wav>``) so the user's ~/.asoundrc chain applies
-      (plug -> softvol "Master" -> dmixer -> hw); on nonzero exit, timeout,
-      or launch failure it retries exactly once on the best hardware card
+      (``aplay -q <file.wav>``) - the system default route, exactly like the
+      reference repo (BRAILCE-TYPING-AND-AI-ONLY), which configures no
+      ~/.asoundrc / /etc/asound.conf; on nonzero exit, timeout, or launch
+      failure it retries exactly once on the best hardware card
       (``plughw:<N>,0``).
     - The WAV file is played whole and unmodified: the ORIGINAL path is
       passed to aplay. No temp files, no resampling, no gain stage.
@@ -90,7 +91,9 @@ class AudioDeviceCoordinator:
 
     @classmethod
     def set_volume(cls, volume: int) -> None:
-        """System volume via ALSA softvol control 'Master' (defined in ~/.asoundrc)."""
+        """Best-effort system volume via ``amixer sset Master`` (a no-op unless
+        the system card exposes a Master control; the reference repo sets no
+        ALSA mixer - loudness is mastered in the WAV bank)."""
         try:
             pct = max(0, min(100, int(volume)))
         except (TypeError, ValueError):

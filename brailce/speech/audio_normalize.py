@@ -5,8 +5,9 @@ Brailce Unified Audio Post-Processing & Carrier-Slicer Pipeline
 Single source of truth for WAV standardization across English (Piper) and
 Filipino (sherpa-onnx VITS) audio synthesis and offline cache building:
 - Converts PCM WAVs to 22050 Hz, mono (1 channel), 16-bit signed PCM (no ffmpeg needed).
-- Normalizes active speech RMS loudness to a consistent target (-18 dBFS / RMS ~4200)
-  with hard-clip protection (peak <= 30000).
+- Normalizes active speech RMS loudness to a consistent target
+  (TARGET_ACTIVE_RMS, re-baselined by tools/set_bank_level.py whenever the
+  bank is re-mastered) with hard-clip protection (peak <= 30000).
 - Applies uniform pre/post digital zero silence padding (120 ms pre, 180 ms post).
 - Provides generalized carrier-sentence audio slicing ("Please say: <target>.")
   for isolated English words and characters.
@@ -30,7 +31,7 @@ TARGET_CHANNELS = 1
 TARGET_SAMPWIDTH = 2
 # Re-baselined by tools/set_bank_level.py whenever the bank is re-mastered to a
 # measured clean-speaker peak; keeps live Piper/Filipino synthesis at the bank level.
-TARGET_ACTIVE_RMS = 4200.0
+TARGET_ACTIVE_RMS = 3900.0
 MAX_PEAK_INT16 = 30000.0
 DEFAULT_PRE_SILENCE_MS = 120
 DEFAULT_POST_SILENCE_MS = 180

@@ -25,32 +25,24 @@ amixer set Headphone 100% unmute 2>/dev/null || true
 echo -e "${YELLOW}[2/5] Detecting sound cards (aplay -l)...${NC}"
 aplay -l || true
 
-# Auto-configure ~/.asoundrc if USB Audio or I2S DAC is found
-USB_CARD=$(aplay -l 2>/dev/null | grep -i "usb" | head -n1 | sed -n 's/card \([0-9]\):.*/\1/p' || true)
-DAC_CARD=$(aplay -l 2>/dev/null | grep -iE "dac|hifiberry|i2s|max98357" | head -n1 | sed -n 's/card \([0-9]\):.*/\1/p' || true)
+# ALSA route: the reference repo (BRAILCE-TYPING-AND-AI-ONLY) writes NO
+# ~/.asoundrc anywhere - playback uses the Pi system default. Back up and
+# REMOVE any custom ALSA config instead of writing one (the custom plug/hw and
+# softvol/dmixer chains measured basag on this hardware).
+echo -e "${YELLOW}Restoring the reference ALSA route (system default)...${NC}"
+STAMP="$(date +%Y%m%d)"
+for ALSA_FILE in "$HOME/.asoundrc" "/etc/asound.conf"; do
+    if [ -f "$ALSA_FILE" ]; then
+        if [ "$ALSA_FILE" = "/etc/asound.conf" ]; then
+            sudo mv "$ALSA_FILE" "${ALSA_FILE}.bak.${STAMP}"
+        else
+            mv "$ALSA_FILE" "${ALSA_FILE}.bak.${STAMP}"
+        fi
+        echo -e "${GREEN}✓ Backed up ${ALSA_FILE} -> ${ALSA_FILE}.bak.${STAMP}${NC}"
+    fi
+done
+echo -e "${GREEN}✓ System default ALSA route active (reference behavior - no custom config written).${NC}"
 
-TARGET_CARD=""
-if [ -n "$USB_CARD" ]; then
-    TARGET_CARD="$USB_CARD"
-    echo -e "${GREEN}Found USB Audio card at index $TARGET_CARD! Setting as default output...${NC}"
-elif [ -n "$DAC_CARD" ]; then
-    TARGET_CARD="$DAC_CARD"
-    echo -e "${GREEN}Found I2S DAC card at index $TARGET_CARD! Setting as default output...${NC}"
-fi
-
-if [ -n "$TARGET_CARD" ]; then
-    cat <<EOF > "$HOME/.asoundrc"
-pcm.!default {
-    type hw
-    card $TARGET_CARD
-}
-ctl.!default {
-    type hw
-    card $TARGET_CARD
-}
-EOF
-    echo -e "${GREEN}Created ~/.asoundrc pointing to card $TARGET_CARD${NC}"
-fi
 
 # 3. Verify Piper Neural TTS binary and voice model
 echo -e "${YELLOW}[3/5] Checking Piper Neural TTS...${NC}"
