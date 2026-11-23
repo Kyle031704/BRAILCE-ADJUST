@@ -15,7 +15,8 @@ echo -e "${GREEN}     Brailce: Anti-Buzzing & Audio Distortion Fix              
 echo -e "${BLUE}==================================================================${NC}"
 echo ""
 
-cd "$HOME/BRAILCE-ADJUST"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$SCRIPT_DIR"
 
 # 1. Match the reference repo (BRAILCE-TYPING-AND-AI-ONLY) ALSA route.
 #    The reference writes NO ~/.asoundrc and NO /etc/asound.conf anywhere:

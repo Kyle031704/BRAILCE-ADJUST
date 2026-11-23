@@ -101,7 +101,8 @@ echo -e "${YELLOW}[6/6] Launching Brailce application...${NC}"
 echo -e "${GREEN}==================================================================${NC}"
 echo -e "${GREEN}   Brailce starting... Mode introduction will speak now!          ${NC}"
 echo -e "${GREEN}==================================================================${NC}"
-cd "$HOME/BRAILCE-ADJUST"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$SCRIPT_DIR"
 if [ -f "$HOME/venv/bin/activate" ]; then
     source "$HOME/venv/bin/activate"
 fi

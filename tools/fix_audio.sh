@@ -64,7 +64,8 @@ fi
 
 # 4. Direct sound playback test
 echo -e "${YELLOW}[4/5] Testing direct audio playback (char_A.wav)...${NC}"
-cd "$HOME/BRAILCE-ADJUST"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$SCRIPT_DIR"
 if [ -f "brailce/audio/characters/char_A.wav" ]; then
     aplay -q "brailce/audio/characters/char_A.wav" || echo -e "${RED}aplay failed. Check speaker connection.${NC}"
 fi
