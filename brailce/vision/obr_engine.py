@@ -921,10 +921,10 @@ class OBREngine:
             dots, dot_diam = self.detect_dots(small)
             if len(dots) < 4:
                 dots_e, diam_e = self.detect_dots(self.enhance_contrast(small))
-                if len(dots_e) > len(dots):
+                if len(dots_e) > len(dots) and len(dots_e) <= 300 and diam_e >= 3.5:
                     dots, dot_diam = dots_e, diam_e
             n = len(dots)
-            if n < 4:
+            if n < 4 or n > 350:
                 return 0.0
 
             # Gate 3: dot coverage fraction — noise/static fills >10% of frame area with tiny blobs;
@@ -1047,9 +1047,9 @@ class OBREngine:
         dots, dot_diam = self.detect_dots(small)
         if len(dots) < 4:
             dots_e, diam_e = self.detect_dots(self.enhance_contrast(small))
-            if len(dots_e) > len(dots):
+            if len(dots_e) > len(dots) and len(dots_e) <= 300 and diam_e >= 3.5:
                 dots, dot_diam = dots_e, diam_e
-        if len(dots) < 4:
+        if len(dots) < 4 or len(dots) > 350:
             return {"state": "no_braille", "confidence": conf, "dot_diameter": 0.0, "dot_pitch": 0.0, "dot_count": len(dots)}
 
         skew_deg, p_dot = self._estimate_skew_and_pitch(dots, dot_diam)
