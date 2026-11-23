@@ -217,9 +217,6 @@ class AIAssistantMode(BaseMode):
         if self.app.display:
             self.app.display.show_ai_processing(query)
 
-        if self.app.speech:
-            self.app.speech.speak_sentence(query, interrupt=False)
-
         # Start background thread for Ollama inference
         self._cancel_event.clear()
         threading.Thread(target=self._process_query, args=(query,), daemon=True).start()
@@ -231,10 +228,7 @@ class AIAssistantMode(BaseMode):
         if self._cancel_event.is_set():
             return
 
-        if self.app.speech:
-            self.app.speech.speak_text(get_string("AI_THINKING", lang), interrupt=False)
-
-        # Check for pre-cached offline Filipino AI responses
+        # Check for pre-cached offline Filipino AI responses first
         if lang == "fil":
             clean_q = re.sub(r"[^a-zA-Z0-9\s]", "", query.replace("-", " ")).strip().lower()
             clean_q = " ".join(clean_q.split())
@@ -243,6 +237,9 @@ class AIAssistantMode(BaseMode):
                 logger.info("AI: Instant offline response matched for '%s'", clean_q)
                 self._finish_processing(resp, query=query)
                 return
+
+        if self.app.speech:
+            self.app.speech.speak_text(get_string("AI_THINKING", lang), interrupt=False)
 
         if not hasattr(self.app, "ai_client") or not self.app.ai_client:
             self._finish_processing(get_string("AI_UNAVAILABLE", lang), query=query)
@@ -270,7 +267,7 @@ class AIAssistantMode(BaseMode):
             if getattr(self.state, "language", "en") == "fil":
                 self.app.speech.speak_response_text(final_resp, interrupt=False, allow_ai_cache=True, lang="fil")
             else:
-                self.app.speech.speak_response_text(final_resp, interrupt=False, lang="en")
+                self.app.speech.speak_text(final_resp, interrupt=False)
 
     def on_enter(self) -> None:
         logger.info("Entered AI Assistant Mode.")

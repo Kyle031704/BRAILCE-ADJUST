@@ -106,7 +106,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
     },
     "MODE_NAME_AI": {
         "en": "AI Assistant Mode",
-        "fil": "AI Mode",
+        "fil": "AI Assistant Mode",
     },
     "MODE_NAME_SCANNER": {
         "en": "Scanner Mode",
@@ -122,7 +122,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
     },
     "MODE_INTRO_AI": {
         "en": "AI Assistant Mode. Type your question and press Enter.",
-        "fil": "AI Mode. I-type ang iyong tanong, pagkatapos ay pindutin ang Enter.",
+        "fil": "AI Assistant Mode. I-type ang iyong tanong, pagkatapos ay pindutin ang Enter.",
     },
     "MODE_INTRO_SCANNER": {
         "en": "Scanner Mode. Hold a Braille page and press Enter to scan.",

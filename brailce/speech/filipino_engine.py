@@ -737,6 +737,8 @@ class FilipinoEngine:
             "wikang filipino": "switched_fil.wav",
             "malayang paglalagay mag-type ng mga titik at salita": "mode_free_input.wav",
             "matematika mag-type ng mga numero at operasyon": "mode_math.wav",
+            "ai assistant mode i-type ang iyong tanong pagkatapos ay pindutin ang enter": "mode_ai.wav",
+            "ai assistant mode": "mode_ai.wav",
             "katulong na ai i-type ang iyong tanong pagkatapos ay pindutin ang enter": "mode_ai.wav",
             "ai mode i-type ang iyong tanong pagkatapos ay pindutin ang enter": "mode_ai.wav",
             "ey-ay mowd i-type ang iyong tanong pagkatapos ay pindutin ang enter": "mode_ai.wav",
@@ -932,11 +934,13 @@ class FilipinoEngine:
             return False
 
         framerate = TARGET_SAMPLE_RATE
-        gap_samples = int(framerate * 0.010)  # Exactly 10ms
+        # Natural inter-word spacing: 45ms pause between words so speech flows naturally without abrupt cuts
+        word_pause_ms = max(35, getattr(self, "word_gap_ms", 45))
+        gap_samples = int(framerate * (word_pause_ms / 1000.0))
         gap_word = b"\x00\x00" * gap_samples
-        gap_comma = b"\x00\x00" * int(framerate * (max(50, getattr(self, "comma_pause_ms", 150)) / 1000.0))
-        gap_period = b"\x00\x00" * int(framerate * (max(100, getattr(self, "sentence_pause_ms", 300)) / 1000.0))
-        gap_semicolon = b"\x00\x00" * int(framerate * (max(50, getattr(self, "comma_pause_ms", 150)) / 1000.0))
+        gap_comma = b"\x00\x00" * int(framerate * (max(120, getattr(self, "comma_pause_ms", 200)) / 1000.0))
+        gap_period = b"\x00\x00" * int(framerate * (max(200, getattr(self, "sentence_pause_ms", 380)) / 1000.0))
+        gap_semicolon = b"\x00\x00" * int(framerate * (max(120, getattr(self, "comma_pause_ms", 200)) / 1000.0))
 
         combined_pcm = bytearray()
         import numpy as np
@@ -958,12 +962,16 @@ class FilipinoEngine:
                         with wave.open(cached_wav, "rb") as wf:
                             raw_frames = wf.readframes(wf.getnframes())
                         arr = np.frombuffer(raw_frames, dtype=np.int16).copy()
-                        # Dynamic clean silence trimming (> 120 amplitude threshold)
-                        nz = np.where(np.abs(arr) > 120)[0]
+                        # Clean silence trimming preserving natural onset and release tails
+                        nz = np.where(np.abs(arr) > 100)[0]
                         if nz.size > 0:
-                            trimmed = arr[nz[0] : nz[-1] + 1].copy()
-                            # 3-5ms micro-fade at edges to prevent clicks/pops
-                            mf_len = min(int(framerate * 0.004), len(trimmed) // 4)
+                            lead_pad = int(framerate * 0.015)
+                            tail_pad = int(framerate * 0.035)
+                            start_idx = max(0, nz[0] - lead_pad)
+                            end_idx = min(len(arr), nz[-1] + 1 + tail_pad)
+                            trimmed = arr[start_idx:end_idx].copy()
+                            # 8ms cosine fade at edges to prevent clicks without cutting phonemes
+                            mf_len = min(int(framerate * 0.008), len(trimmed) // 4)
                             if mf_len > 1:
                                 mf_in = 0.5 * (1.0 - np.cos(np.linspace(0, np.pi, mf_len)))
                                 mf_out = 0.5 * (1.0 + np.cos(np.linspace(0, np.pi, mf_len)))

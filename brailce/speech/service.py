@@ -40,10 +40,10 @@ PUNCTUATION_NAME_MAP: Dict[str, str] = dict(PUNCTUATION_MAP)
 
 VALID_BEHAVIORS = {"character", "character_and_word", "completed_text_only"}
 
-# Standardized response speech constants (Task 2) - Optimized for low latency
-WORD_GAP_MS: int = 10
-COMMA_PAUSE_MS: int = 100
-SENTENCE_PAUSE_MS: int = 160
+# Standardized response speech constants - Natural human cadence
+WORD_GAP_MS: int = 45
+COMMA_PAUSE_MS: int = 200
+SENTENCE_PAUSE_MS: int = 380
 
 
 class SpeechService(SpeechEngine):
@@ -381,15 +381,13 @@ class SpeechService(SpeechEngine):
             self.speak_character(clean)
             return
 
-        # Attempt studio-quality neural female synthesis first (both English & Filipino)
-        if self._speak_neural_female(text, interrupt=interrupt):
-            self._record_utterance("text", text, {"interrupt": interrupt, "engine": "blessica_neural"})
-            return
-
         if self._language == "fil":
             if interrupt:
                 self.stop()
             self._record_utterance("text", text, {"interrupt": interrupt, "lang": "fil"})
+            # Attempt studio-quality neural female synthesis for Filipino if available
+            if self._speak_neural_female(text, interrupt=interrupt):
+                return
             self.filipino_engine.enqueue_text(text, interrupt=interrupt, allow_ai_cache=allow_ai_cache)
             return
 

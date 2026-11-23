@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Regenerate the English + Filipino character pronunciation banks (char_*.wav).
 
@@ -81,12 +81,12 @@ EN_VOICE = "en-US-JennyNeural"
 FIL_VOICE = "en-PH-RosaNeural"
 
 LETTER_TEXTS: Dict[str, str] = {
-    "A": "ay", "B": "bee", "C": "see", "D": "dee", "E": "ee",
-    "F": "ef", "G": "gee", "H": "aitch", "I": "eye", "J": "jay",
-    "K": "kay", "L": "el", "M": "em", "N": "en", "O": "oh",
-    "P": "pee", "Q": "cue", "R": "ar", "S": "es", "T": "tee",
-    "U": "you", "V": "vee", "W": "double you", "X": "ex",
-    "Y": "why", "Z": "zee",
+    "A": "A.", "B": "B.", "C": "C.", "D": "D.", "E": "E.",
+    "F": "F.", "G": "G.", "H": "H.", "I": "I.", "J": "J.",
+    "K": "K.", "L": "L.", "M": "M.", "N": "N.", "O": "O.",
+    "P": "P.", "Q": "Q.", "R": "R.", "S": "S.", "T": "T.",
+    "U": "U.", "V": "V.", "W": "double-u.", "X": "X.",
+    "Y": "Y.", "Z": "Z.",
 }
 ENYE_TEXT = "enye"
 DIGIT_TEXTS: Dict[str, str] = {
