@@ -19,7 +19,9 @@ from __future__ import annotations
 import logging
 import os
 import signal
+import subprocess
 import sys
+import time
 from typing import Optional
 
 from brailce.config.loader import ConfigLoader
@@ -30,6 +32,7 @@ from brailce.display.base import DisplayDevice
 from brailce.display.console_display import ConsoleDisplay
 from brailce.input.base import InputDevice
 from brailce.input.evdev_input import create_input_device
+from brailce.input.shutdown_button import ShutdownButton
 from brailce.braille.mapping import BrailleMappingService
 from brailce.braille.encoder import BrailleEncoder
 from brailce.modes.ai_assistant import AIAssistantMode
@@ -71,6 +74,7 @@ class BrailceApp:
         self.sound = None
         self.power: Optional[PowerMonitor] = None
         self.battery_poller: Optional[BatteryPoller] = None
+        self.shutdown_button: Optional[ShutdownButton] = None
         self.camera: Optional[CameraDevice] = None
         self.obr: Optional[OBREngine] = None
         self.mapping_service: Optional[BrailleMappingService] = None
@@ -84,6 +88,9 @@ class BrailceApp:
         # Mode instances
         self._modes: dict[AppMode, BaseMode] = {}
         self._active_mode: Optional[BaseMode] = None
+
+        # Safe shutdown (Ctrl+P / GPIO long-press) fires exactly once per run
+        self._shutdown_requested: bool = False
 
     # ---- Lifecycle ----
 
@@ -255,6 +262,12 @@ class BrailceApp:
         )
         self.battery_poller.start()
 
+        # ---- Optional GPIO shutdown button (long-press power switch) ----
+        # Emits SHUTDOWN_PRESSED through the normal app handler (the
+        # same event as the Ctrl+P combo); disabled with one INFO log
+        # when power.shutdown_gpio is null or gpiozero is unavailable.
+        self._setup_shutdown_button()
+
         logger.info("Brailce application setup complete.")
         logger.info(
             "Input: %s | Display: %s | Speech: %s",
@@ -303,6 +316,12 @@ class BrailceApp:
             except Exception:
                 logger.exception("Error stopping battery poller.")
 
+        if self.shutdown_button is not None:
+            try:
+                self.shutdown_button.stop()
+            except Exception:
+                logger.exception("Error stopping GPIO shutdown button.")
+
         if self.input_device:
             try:
                 self.input_device.stop()
@@ -349,6 +368,12 @@ class BrailceApp:
             if event.event_type == EventType.QUIT:
                 logger.info("Quit event received.")
                 self.state.is_running = False
+                return
+
+            if event.event_type == EventType.SHUTDOWN_PRESSED:
+                # Ctrl+P or GPIO long-press: safe shutdown (announce,
+                # clean up, power off). Fires exactly once per run.
+                self._handle_shutdown_pressed()
                 return
 
             if event.event_type == EventType.STOP_PRESSED:
@@ -461,6 +486,150 @@ class BrailceApp:
             self.speech.speak_mode_intro(new_mode, interrupt=False)
 
         logger.info("Mode changed to: %s (%s)", new_mode.display_name(), self.state.language)
+
+    # ---- Safe Shutdown (Ctrl+P / GPIO long-press) ----
+
+    def _setup_shutdown_button(self) -> None:
+        """
+        Wire the optional GPIO long-press power switch
+        (power.shutdown_gpio, BCM pin number).
+
+        Disabled by default (null); with no pin configured or no
+        gpiozero the app logs one INFO and continues without the
+        button, so the service boots fine on dev machines too.
+        """
+        shutdown_gpio = self.config.get("power", "shutdown_gpio", default=None)
+        if shutdown_gpio is None:
+            logger.info(
+                "No power.shutdown_gpio configured - GPIO shutdown button disabled."
+            )
+            return
+        try:
+            pin = int(shutdown_gpio)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid power.shutdown_gpio value %r - GPIO shutdown button disabled.",
+                shutdown_gpio,
+            )
+            return
+        hold_seconds = float(
+            self.config.get("power", "shutdown_hold_seconds", default=2.0)
+        )
+        pull_up = bool(self.config.get("power", "shutdown_pull_up", default=True))
+        self.shutdown_button = ShutdownButton(
+            pin=pin, hold_seconds=hold_seconds, pull_up=pull_up
+        )
+        self.shutdown_button.register_callback(self._on_input_event)
+        self.shutdown_button.start()
+
+    def _handle_shutdown_pressed(self) -> None:
+        """
+        Safe shutdown flow, fired EXACTLY ONCE per run:
+            1. Announce over speech (non-interrupting) + show on display.
+            2. Wait (bounded, up to 5 s) for the speech queue to drain
+               so the announcement is actually heard.
+            3. Run the normal app shutdown/cleanup path (same as QUIT).
+            4. systemctl poweroff (fallback: shutdown -h now).
+
+        Repeated SHUTDOWN_PRESSED events (extra Ctrl+P presses or a
+        second GPIO hold while shutting down) are ignored.
+        """
+        if self._shutdown_requested:
+            logger.info(
+                "Shutdown already in progress - ignoring repeated SHUTDOWN_PRESSED."
+            )
+            return
+        self._shutdown_requested = True
+        logger.info("Shutdown pressed - starting safe shutdown.")
+
+        from brailce.i18n.strings import get_string
+        message = get_string("SHUTDOWN_ANNOUNCE", self.state.language)
+        if self.display:
+            try:
+                self.display.show_status(message)
+            except Exception:
+                logger.exception("Error showing shutdown status.")
+
+        if self.speech:
+            try:
+                self.speech.speak_text(message, interrupt=False)
+            except Exception:
+                logger.exception("Error announcing shutdown.")
+            self._wait_for_speech_to_drain(timeout=5.0)
+
+        self.shutdown()
+        self._power_off()
+
+    def _wait_for_speech_to_drain(self, timeout: float = 5.0) -> None:
+        """
+        Bounded wait for the shutdown announcement to finish playing.
+
+        The speech stack has no explicit drain API, so poll its existing
+        mechanisms: every engine queue (Piper/eSpeak/Filipino) must be
+        empty AND AudioDeviceCoordinator must have no active playback
+        process. Returns as soon as idle; never waits past *timeout*.
+        """
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while time.monotonic() < deadline:
+            if self._speech_is_idle():
+                return
+            time.sleep(0.1)
+        logger.info(
+            "Speech drain wait timed out after %.1f s - proceeding.", timeout
+        )
+
+    def _speech_is_idle(self) -> bool:
+        """True when no speech queue holds pending items and nothing plays."""
+        speech = self.speech
+        if speech is None:
+            return True
+        engines = []
+        for attr in ("_engine", "_character_engine", "_text_engine", "_filipino_engine"):
+            engine = getattr(speech, attr, None)
+            if engine is not None and not any(engine is seen for seen in engines):
+                engines.append(engine)
+        for engine in engines:
+            engine_queue = getattr(engine, "_queue", None)
+            if engine_queue is None:
+                continue
+            try:
+                if not engine_queue.empty():
+                    return False
+            except Exception:
+                pass
+        try:
+            from brailce.speech.audio_device import AudioDeviceCoordinator
+            if AudioDeviceCoordinator._active_process is not None:
+                return False
+        except Exception:
+            pass
+        return True
+
+    def _power_off(self) -> None:
+        """
+        Power the machine off via systemd; fall back to shutdown(8)
+        when systemctl is missing. List-form subprocess, all output
+        suppressed, errors logged - the app is already cleaned up.
+        """
+        commands = (
+            ["systemctl", "poweroff"],
+            ["shutdown", "-h", "now"],
+        )
+        for command in commands:
+            try:
+                subprocess.run(
+                    command,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+                logger.info("Power off requested via %s.", " ".join(command))
+                return
+            except FileNotFoundError:
+                logger.error("%s not available - trying fallback.", command[0])
+            except Exception:
+                logger.exception("Power off command failed: %s", command)
+        logger.error("Power off failed: no shutdown command available.")
 
     def _signal_handler(self, signum: int, frame: object) -> None:
         """Handle interrupt signals gracefully."""

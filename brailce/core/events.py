@@ -66,6 +66,9 @@ class EventType(Enum):
     VOLUME_UP = auto()
     VOLUME_DOWN = auto()
     STOP_PRESSED = auto()
+    # Safe shutdown request (Ctrl+P combo or GPIO long-press):
+    # announce, clean up, then power the machine off
+    SHUTDOWN_PRESSED = auto()
 
     # System events
     QUIT = auto()

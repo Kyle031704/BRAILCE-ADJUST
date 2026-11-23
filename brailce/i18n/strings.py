@@ -85,6 +85,16 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "fil": "Puno na.",
     },
 
+    # ---- Safe Shutdown (Ctrl+P / GPIO long-press) ----
+    # Spoken (and shown) once before the app powers the Pi off.
+    # Filipino uses the banked verb "pinapatay" (same verb as
+    # APP_SHUTDOWN); "nagpapatay" has no cached WAV in the frozen
+    # brailce/audio/filipino word bank.
+    "SHUTDOWN_ANNOUNCE": {
+        "en": "Shutting down. Goodbye.",
+        "fil": "Pinapatay na ang Brailce. Paalam.",
+    },
+
     # ---- Mode Names & Introductions (LCD + Spoken) ----
     "MODE_NAME_FREE_INPUT": {
         "en": "Free Input Mode",

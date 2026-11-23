@@ -18,6 +18,12 @@ Behavior by mode:
     AI_ASSISTANT:
         Normal text input; only ENTER submits the AI query.
 
+Power keys (all input paths):
+    Ctrl+P  -> SHUTDOWN_PRESSED (safe shutdown: announcement, cleanup,
+               then systemctl poweroff)
+    Ctrl+C / Ctrl+Q -> QUIT (quit the app back to the shell; unchanged)
+    Esc     -> STOP_PRESSED (stop speech/activity; unchanged)
+
 Threading:
     The keyboard listener runs in a background thread so it does
     not block the main application loop.
@@ -195,6 +201,15 @@ class KeyboardInputDevice(InputDevice):
                 self._running = False
                 self._emit_event(control_event(EventType.QUIT, self.SOURCE_NAME))
                 return
+            elif ch == "\x10":  # Ctrl+P -> safe shutdown (announcement + poweroff)
+                logger.info(
+                    "Terminal listener: Ctrl+P received, emitting SHUTDOWN_PRESSED"
+                )
+                self._running = False
+                self._emit_event(
+                    control_event(EventType.SHUTDOWN_PRESSED, self.SOURCE_NAME)
+                )
+                return
             elif ch == "\x1b":
                 # Check if this is an escape sequence (e.g. F1, F2 in PuTTY)
                 import sys
@@ -281,6 +296,14 @@ class KeyboardInputDevice(InputDevice):
 
         if key_name.lower() == "ctrl+q":
             self._emit_event(control_event(EventType.QUIT, self.SOURCE_NAME))
+            return
+
+        if key_name.lower() == "ctrl+p":
+            # Ctrl+P = SAFE SHUTDOWN (announce -> cleanup -> poweroff);
+            # Ctrl+C / Ctrl+Q above = quit the app to the shell (unchanged)
+            self._emit_event(
+                control_event(EventType.SHUTDOWN_PRESSED, self.SOURCE_NAME)
+            )
             return
 
         if key_name.lower() == "ctrl+c":

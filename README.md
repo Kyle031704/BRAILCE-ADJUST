@@ -13,7 +13,7 @@ Brailce is a portable **Raspberry Pi 5** assistive learning device for visually 
 | **AI Assistant** | Offline Ollama (`lfm2.5-1.2b-instruct`) Q&A with bilingual guardrails and clean spoken normalization | Question input + `Enter` |
 | **Scanner Mode** | Offline classical dot-level Grade 1 Braille camera scanner with live presence detection and letter -> word readout | Position sheet, `Enter` to scan/repeat, any key to stop, `Clear` to reset |
 
-Desktop/PuTTY controls: `A-Z`, `0-9`, `+ - * /`, `Space`, `Enter`, `Backspace`, `F1` (Mode), `F2` (Language EN/FIL), `F3` (Clear), `F11`/`F12` (Volume Down/Up), `Esc` (Stop speech/readout/AI request), `Ctrl+C` or `Ctrl+Q` (Quit). The SAME mapping applies to a USB keyboard plugged directly into the Pi - see below.
+Desktop/PuTTY controls: `A-Z`, `0-9`, `+ - * /`, `Space`, `Enter`, `Backspace`, `F1` (Mode), `F2` (Language EN/FIL), `F3` (Clear), `F11`/`F12` (Volume Down/Up), `Esc` (Stop speech/readout/AI request), `Ctrl+C` or `Ctrl+Q` (Quit), `Ctrl+P` (Safe shutdown). The SAME mapping applies to a USB keyboard plugged directly into the Pi - see below.
 
 ---
 
@@ -39,7 +39,8 @@ A USB keyboard plugged directly into the Pi drives the app **without any SSH/PuT
 | `F3` or `Delete` | Clear the buffer |
 | `F11` / `F12` | Volume down / volume up |
 | `Esc` | Stop speech / scanner readout / AI request |
-| `Ctrl+C` or `Ctrl+Q` | Quit the app |
+| `Ctrl+C` or `Ctrl+Q` | Quit the app (back to the shell) |
+| `Ctrl+P` | **Safe shutdown** - announce, clean up, then power the Pi off |
 
 Quick language toggle: press `Backspace`+`Space` (or `Space`+`Backspace`) within 0.35 s.
 
@@ -50,6 +51,23 @@ Quick language toggle: press `Backspace`+`Space` (or `Space`+`Backspace`) within
   - `"evdev"`: force the direct `/dev/input` USB path.
   - `"terminal"`: force the legacy keyboard hook + terminal stdin path.
 - `"usb_name_match"`: optional case-insensitive substring filter on the USB keyboard device name (e.g. `"Logitech"`); empty = accept any keyboard.
+
+### Safe Shutdown
+
+**Never cut power to a running Pi** - flipping a hard power switch while the app is running can corrupt the SD card. Power the device OFF with one of the safe paths instead; flip the hard power switch only AFTER the shutdown announcement has played and the Pi has powered itself off.
+
+| Key / Button | Action |
+|--------------|--------|
+| `Ctrl+P` (USB keyboard, PuTTY, or laptop) | Safe shutdown: the device announces "Shutting down. Goodbye." (Filipino: "Pinapatay na ang Brailce. Paalam."), waits for the voice to finish, runs the normal app cleanup, then executes `systemctl poweroff`. Repeated presses are ignored. |
+
+`Ctrl+C` / `Ctrl+Q` remain "quit the app back to the shell" (for debugging); only `Ctrl+P` powers the Pi off.
+
+**Optional GPIO long-press button** - for users who wire their power switch to a GPIO pin:
+
+1. Set `power.shutdown_gpio` in `brailce/config/config.json` to the BCM pin number (e.g. `17`); leave it `null` (default) when no button is wired.
+2. Wire the button between that BCM pin and **GND** (the internal pull-up is enabled by default: `power.shutdown_pull_up: true`).
+3. Hold the button for `power.shutdown_hold_seconds` (default `2.0` s) to trigger the exact same safe-shutdown flow as `Ctrl+P` (same announcement, cleanup, `systemctl poweroff`).
+4. `gpiozero` (already in `requirements-pi.txt`) is imported lazily - when it is unavailable or the pin is `null`, the app logs one INFO line and continues without the button, so the service still boots fine on dev machines.
 
 ---
 

@@ -17,8 +17,9 @@ Design:
       "f1", "space", "esc", "ctrl+q", ...) and dispatches them through
       KeyboardInputDevice._dispatch_key_name - there is no second event
       vocabulary, so ALL existing behavior (Esc -> STOP_PRESSED,
-      Ctrl+C/Ctrl+Q -> QUIT, F1/F2/F3, volume keys, character events)
-      works identically.
+      Ctrl+C/Ctrl+Q -> QUIT, Ctrl+P -> SHUTDOWN_PRESSED (safe
+      shutdown), F1/F2/F3, volume keys, character events) works
+      identically.
     - Hotplug tolerant: when no keyboard is found the loop re-enumerates
       every RESCAN_SECONDS (5 s), so the keyboard may be plugged in
       before or after boot without restarting the service. Read errors
@@ -336,7 +337,7 @@ class EvdevInputDevice(KeyboardInputDevice):
 
             if "ctrl" in self._modifiers:
                 base = self._key_table.get(event.code)
-                if base in ("c", "q"):
+                if base in ("c", "q", "p"):  # c/q quit; p = safe shutdown
                     self._dispatch_key_name("ctrl+" + base)
                 return  # other ctrl combos intentionally ignored
             if "alt" in self._modifiers:
