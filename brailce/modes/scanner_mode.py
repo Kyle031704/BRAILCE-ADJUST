@@ -23,6 +23,7 @@ from brailce.i18n.strings import get_mode_name, get_string
 from brailce.modes.base_mode import BaseMode
 from brailce.speech.audio_device import AudioDeviceCoordinator
 from brailce.vision.camera import CameraNotConnectedError, compute_sharpness
+from brailce.vision.obr_engine import UNKNOWN_CELL_CHAR
 
 logger = logging.getLogger(__name__)
 
@@ -492,19 +493,26 @@ class ScannerMode(BaseMode):
 
             for cand in candidates:
                 self._scanned_frame = cand
-                res = self.app.obr.process_image(cand)
+                # 1. Try slim horizontal single-line ROI first (matches HUD reticle and excludes ink text below)
+                res_center = self.app.obr.process_image(cand, full_frame=False)
+                if (
+                    res_center.get("readable")
+                    and str(res_center.get("text", "")).strip()
+                    and UNKNOWN_CELL_CHAR not in str(res_center.get("text", ""))
+                ):
+                    best_result = res_center
+                    best_frame = cand
+                    break
+
+                # 2. Try full frame if ROI had no readable Braille
+                res = self.app.obr.process_image(cand, full_frame=True)
                 if res.get("readable") and str(res.get("text", "")).strip():
                     best_result = res
                     best_frame = cand
                     break
-                # Center-crop fallback if full-frame produced no readable text
-                res_center = self.app.obr.process_image(cand, full_frame=False)
-                if res_center.get("readable") and str(res_center.get("text", "")).strip():
-                    best_result = res_center
-                    best_frame = cand
-                    break
+
                 if best_result is None:
-                    best_result = res
+                    best_result = res_center if res_center.get("readable") else res
                     best_frame = cand
 
             self._scanned_frame = best_frame

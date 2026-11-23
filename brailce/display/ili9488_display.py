@@ -751,11 +751,11 @@ class ILI9488Display(DisplayDevice):
             draw = ImageDraw.Draw(preview_img)
 
             # Center Braille Scanning Reticle & Framing Border (Embossed HUD style)
-            from brailce.vision.obr_engine import SHOW_ROI
+            from brailce.vision.obr_engine import SHOW_ROI, ROI_W_FRAC, ROI_H_FRAC
             if SHOW_ROI:
-                # Centered, optimal framing window for embossed Braille (74% width, 48% height)
-                roi_w_disp = int(nw * 0.74)
-                roi_h_disp = int(nh * 0.48)
+                # Centered slim single-line framing window for embossed Braille (78% width, 22% height)
+                roi_w_disp = int(nw * ROI_W_FRAC)
+                roi_h_disp = int(nh * ROI_H_FRAC)
                 rx0 = ox + int((nw - roi_w_disp) // 2)
                 ry0 = oy + int((nh - roi_h_disp) // 2)
                 rx1 = rx0 + roi_w_disp
@@ -846,15 +846,15 @@ class ILI9488Display(DisplayDevice):
             badge_border = (52, 211, 153)
 
             if distance_state == "ok":
-                badge_text = "SAKTO ANG DISTANSYA • READY"
+                badge_text = "SAKTO ANG DISTANSYA | READY"
                 badge_bg = (20, 83, 45)
                 badge_border = (34, 197, 94)
             elif distance_state == "too_close":
-                badge_text = "MASYADONG MALAPIT • ILAYO"
+                badge_text = "MASYADONG MALAPIT | ILAYO"
                 badge_bg = (120, 53, 15)
                 badge_border = (245, 158, 11)
             elif distance_state == "too_far":
-                badge_text = "MASYADONG MALAYO • ILAPIT"
+                badge_text = "MASYADONG MALAYO | ILAPIT"
                 badge_bg = (120, 53, 15)
                 badge_border = (245, 158, 11)
             elif status and "detected" in str(status).lower():
@@ -880,7 +880,7 @@ class ILI9488Display(DisplayDevice):
             st = str(status) if status else get_string("SCANNER_STATUS_POSITION", lang)
             draw.rectangle([(0, self._height - 34), (self._width, self._height)], fill=(3, 7, 18))
             draw.line([(0, self._height - 34), (self._width, self._height - 34)], fill=(31, 41, 55), width=1)
-            draw.text((15, self._height - 24), f"● {st[:55]}", fill=(56, 189, 248), font=self._font_small or None)
+            draw.text((15, self._height - 24), f"- {st[:55]}", fill=(56, 189, 248), font=self._font_small or None)
 
             # Direct SPI / framebuffer flush (must be done while holding lock)
             if self._device is not None:

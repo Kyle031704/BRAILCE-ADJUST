@@ -34,9 +34,9 @@ logger = logging.getLogger(__name__)
 
 UNKNOWN_CELL_CHAR = "?"
 
-# Center ROI Constants
-ROI_W_FRAC: float = 0.85
-ROI_H_FRAC: float = 0.75
+# Center ROI Constants (slim horizontal box for single-line Braille)
+ROI_W_FRAC: float = 0.78
+ROI_H_FRAC: float = 0.22
 SHOW_ROI: bool = True
 
 
@@ -343,40 +343,86 @@ class OBREngine:
     # =========================================================================
 
     @staticmethod
+    def remove_background_shadows(gray: np.ndarray) -> np.ndarray:
+        """
+        Flatten corner shadows and uneven lighting using local Gaussian background subtraction.
+        Subtracts large-scale illumination gradients (31x31 Gaussian blur) while preserving
+        small dot/crescent structures (diameters 4px-16px).
+        """
+        if gray is None or cv2 is None or gray.size == 0:
+            return gray
+        kh = min(31, gray.shape[0] - (1 - gray.shape[0] % 2))
+        kw = min(31, gray.shape[1] - (1 - gray.shape[1] % 2))
+        kh = max(3, kh if kh % 2 == 1 else kh - 1)
+        kw = max(3, kw if kw % 2 == 1 else kw - 1)
+        bg = cv2.GaussianBlur(gray.astype(np.float32), (kw, kh), 0)
+        diff = gray.astype(np.float32) - bg
+        return np.clip(128.0 + diff, 0.0, 255.0).astype(np.uint8)
+
+    @staticmethod
     def suppress_printed_ink(image: np.ndarray) -> np.ndarray:
         """
-        Mask only pure black printed ink (not gray Braille shadows):
-        Instead of masking everything below 115, mask only very dark,
-        high-contrast printed text pixels (gray < 70 dilated by a few pixels)
-        and fill them with the local paper median.
-        This removes printed word labels without erasing embossed Braille dot shadows
-        or small printed Braille dots.
+        Mask dark printed/handwritten ink strokes and reject them from Braille candidates:
+        1. Flattens corner shadows via local background subtraction.
+        2. Identifies dark connected components that are significantly larger or more
+           elongated than normal Braille dots (area > 2.5x expected dot area or aspect > 2.0).
+        3. Dilates ink mask slightly and fills with local paper background.
         """
         if image is None or cv2 is None or image.size == 0:
             return image
         clean = image.copy()
-        gray = cv2.cvtColor(clean, cv2.COLOR_BGR2GRAY) if len(clean.shape) == 3 else clean
+        gray = cv2.cvtColor(clean, cv2.COLOR_BGR2GRAY) if len(clean.shape) == 3 else clean.copy()
 
-        paper_median = float(np.median(gray))
-        ink_thresh = min(70.0, paper_median - 40.0)
-        dark_mask = (gray < ink_thresh).astype(np.uint8) * 255
-        if np.any(dark_mask > 0):
-            num, labels, stats, _ = cv2.connectedComponentsWithStats(dark_mask, connectivity=8)
-            # Only mask large connected text components, not small circular Braille dots
-            text_mask = np.zeros_like(dark_mask)
+        # 1. Local background subtraction (removes large corner shadows)
+        flat = OBREngine.remove_background_shadows(gray)
+
+        # 2. Identify candidate dark ink pixels relative to local paper background
+        dark_mask = (flat < 92).astype(np.uint8) * 255
+        paper_med = float(np.median(gray))
+        abs_dark = (gray < min(75.0, paper_med - 35.0)).astype(np.uint8) * 255
+        combined_dark = cv2.bitwise_or(dark_mask, abs_dark)
+
+        if np.any(combined_dark > 0):
+            num, labels, stats, _ = cv2.connectedComponentsWithStats(combined_dark, connectivity=8)
+            areas = [float(stats[i, cv2.CC_STAT_AREA]) for i in range(1, num)]
+            candidate_dot_areas = [a for a in areas if 6.0 <= a <= 110.0]
+            expected_dot_area = float(np.median(candidate_dot_areas)) if candidate_dot_areas else 35.0
+
+            text_mask = np.zeros_like(gray, dtype=np.uint8)
             for i in range(1, num):
-                w = stats[i, cv2.CC_STAT_WIDTH]
-                h = stats[i, cv2.CC_STAT_HEIGHT]
-                a = stats[i, cv2.CC_STAT_AREA]
-                if a > 85 or max(w, h) > 14:
+                w_comp = float(stats[i, cv2.CC_STAT_WIDTH])
+                h_comp = float(stats[i, cv2.CC_STAT_HEIGHT])
+                a_comp = float(stats[i, cv2.CC_STAT_AREA])
+
+                max_dim = max(w_comp, h_comp)
+                min_dim = max(1.0, min(w_comp, h_comp))
+                aspect_ratio = max_dim / min_dim
+
+                # Ink rejection criteria:
+                # - Connected area > 2.5 * expected dot area
+                # - Elongated stroke (aspect ratio > 2.0 and max_dim > 7)
+                # - Very large component (max_dim > 20 or area > 140)
+                is_ink = False
+                if a_comp > max(80.0, 2.5 * expected_dot_area):
+                    is_ink = True
+                elif aspect_ratio > 2.0 and (max_dim > 7.0 or a_comp > 20.0):
+                    is_ink = True
+                elif max_dim > 20.0 or a_comp > 140.0:
+                    is_ink = True
+
+                if is_ink:
                     text_mask[labels == i] = 255
+
             if np.any(text_mask > 0):
-                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-                dilated = cv2.dilate(text_mask, kernel, iterations=2)
+                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+                dilated = cv2.dilate(text_mask, kernel, iterations=1)
+                bg_smooth = cv2.GaussianBlur(gray, (21, 21), 0)
                 if len(clean.shape) == 3:
-                    clean[dilated > 0] = [int(paper_median)] * 3
+                    for c in range(3):
+                        clean[:, :, c][dilated > 0] = bg_smooth[dilated > 0]
                 else:
-                    clean[dilated > 0] = int(paper_median)
+                    clean[dilated > 0] = bg_smooth[dilated > 0]
+
         return clean
 
     @staticmethod
@@ -545,10 +591,11 @@ class OBREngine:
                 # Solid ink dot or top-lit spot
                 paired_dots.append({"x": d_blob["x"], "y": d_blob["y"], "d": d_blob["d"], "score": d_blob["score"]})
 
-        # Non-maximum suppression / deduplicate any dots closer than 0.5 * est_d
+        # Non-maximum suppression / deduplicate any dots closer than 0.72 * est_d
+        # Ensures that highlight and shadow crescents from a single embossed dot are never split into 2 dots
         paired_dots.sort(key=lambda d: d["score"], reverse=True)
         final_dots: List[Dict[str, float]] = []
-        suppress_r = max(3.0, est_d * 0.52)
+        suppress_r = max(4.0, est_d * 0.72)
         for cand in paired_dots:
             if any(math.hypot(cand["x"] - ex["x"], cand["y"] - ex["y"]) <= suppress_r for ex in final_dots):
                 continue
@@ -686,26 +733,26 @@ class OBREngine:
 
             col_xs = [float(np.mean([d["rx"] for d in sc])) for sc in sub_cols]
 
-            # Find paired columns (dx in [0.82 * p_dot, 1.18 * p_dot]) to anchor cell grid.
-            # Intra-cell column gap is strictly 1.0 * p_dot, whereas inter-cell gap is >= 1.4 * p_dot.
+            # Find paired columns (dx in [0.75 * p_dot, 1.25 * p_dot] with ±25% tolerance for stylus-and-slate)
+            # Intra-cell column gap is ~1.0 * p_dot, whereas inter-cell gap is >= 1.4 * p_dot.
             pairs: List[Tuple[float, float]] = []
             i = 0
             while i < len(col_xs) - 1:
                 dx = col_xs[i + 1] - col_xs[i]
-                if 0.82 * p_dot <= dx <= 1.18 * p_dot:
+                if 0.75 * p_dot <= dx <= 1.25 * p_dot:
                     pairs.append((col_xs[i], col_xs[i + 1]))
                     i += 2
                 else:
                     i += 1
 
-            p_cell = p_dot * 2.4
+            p_cell = p_dot * 2.45
             if len(pairs) >= 2:
                 diffs = [pairs[j + 1][0] - pairs[j][0] for j in range(len(pairs) - 1)]
                 cands = []
                 for df in diffs:
                     for k in range(1, 10):
                         pitch = df / k
-                        if 2.1 * p_dot <= pitch <= 2.7 * p_dot:
+                        if 2.1 * p_dot <= pitch <= 2.8 * p_dot:
                             cands.append(pitch)
                 if cands:
                     p_cell = float(np.median(cands))
