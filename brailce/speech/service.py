@@ -41,9 +41,9 @@ PUNCTUATION_NAME_MAP: Dict[str, str] = dict(PUNCTUATION_MAP)
 VALID_BEHAVIORS = {"character", "character_and_word", "completed_text_only"}
 
 # Standardized response speech constants - Natural human cadence
-WORD_GAP_MS: int = 45
-COMMA_PAUSE_MS: int = 200
-SENTENCE_PAUSE_MS: int = 380
+WORD_GAP_MS: int = 10
+COMMA_PAUSE_MS: int = 140
+SENTENCE_PAUSE_MS: int = 260
 
 
 class SpeechService(SpeechEngine):

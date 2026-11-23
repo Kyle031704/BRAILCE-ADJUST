@@ -161,6 +161,9 @@ class TestFilipinoAIAssistant:
 
         # Final answer on LCD and spoken text are identical
         lcd_resp = app.display.show_ai_response.call_args[0][0]
-        last_spoken = app.speech.speak_text.call_args_list[-1][0][0]
+        if app.speech.speak_response_text.called:
+            last_spoken = app.speech.speak_response_text.call_args[0][0]
+        else:
+            last_spoken = app.speech.speak_text.call_args_list[-1][0][0]
         assert lcd_resp == last_spoken == "Ang Maynila ang kabisera ng Pilipinas."
 

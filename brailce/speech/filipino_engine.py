@@ -934,13 +934,13 @@ class FilipinoEngine:
             return False
 
         framerate = TARGET_SAMPLE_RATE
-        # Natural inter-word spacing: 45ms pause between words so speech flows naturally without abrupt cuts
-        word_pause_ms = max(35, getattr(self, "word_gap_ms", 45))
+        # Natural inter-word spacing: smooth 10ms juncture between words so speech flows naturally without abrupt pauses
+        word_pause_ms = min(15, max(5, getattr(self, "word_gap_ms", 10)))
         gap_samples = int(framerate * (word_pause_ms / 1000.0))
         gap_word = b"\x00\x00" * gap_samples
-        gap_comma = b"\x00\x00" * int(framerate * (max(120, getattr(self, "comma_pause_ms", 200)) / 1000.0))
-        gap_period = b"\x00\x00" * int(framerate * (max(200, getattr(self, "sentence_pause_ms", 380)) / 1000.0))
-        gap_semicolon = b"\x00\x00" * int(framerate * (max(120, getattr(self, "comma_pause_ms", 200)) / 1000.0))
+        gap_comma = b"\x00\x00" * int(framerate * (max(100, min(160, getattr(self, "comma_pause_ms", 140))) / 1000.0))
+        gap_period = b"\x00\x00" * int(framerate * (max(180, min(300, getattr(self, "sentence_pause_ms", 260))) / 1000.0))
+        gap_semicolon = gap_comma
 
         combined_pcm = bytearray()
         import numpy as np
@@ -965,8 +965,8 @@ class FilipinoEngine:
                         # Clean silence trimming preserving natural onset and release tails
                         nz = np.where(np.abs(arr) > 100)[0]
                         if nz.size > 0:
-                            lead_pad = int(framerate * 0.015)
-                            tail_pad = int(framerate * 0.035)
+                            lead_pad = int(framerate * 0.005)
+                            tail_pad = int(framerate * 0.010)
                             start_idx = max(0, nz[0] - lead_pad)
                             end_idx = min(len(arr), nz[-1] + 1 + tail_pad)
                             trimmed = arr[start_idx:end_idx].copy()

@@ -384,8 +384,8 @@ class SafeArithmetic:
             steps_str = ", ".join(str(s) for s in steps)
             if lang == "fil":
                 return (
-                    f"Ang {a} dagdag {b} ay {ans}. "
-                    f"Magsimula sa {a}, magbilang ng {b} pa: {steps_str}. Ang sagot ay {ans}.",
+                    f"Ang {a} dagdagan ng {b} ay {ans}. "
+                    f"Magsimula sa {a}, at magbilang ng {b} pa: {steps_str}. Ang sagot ay {ans}.",
                     f"Simula {a} -> {steps_str}"
                 )
             return (
@@ -475,8 +475,8 @@ class SafeArithmetic:
             steps_str = ", ".join(str(s) for s in steps)
             if lang == "fil":
                 return (
-                    f"Ang {a} bawas {b} ay {ans}. "
-                    f"Magsimula sa {a}, magbilang pabalik ng {b}: {steps_str}. Ang sagot ay {ans}.",
+                    f"Ang {a} bawasan ng {b} ay {ans}. "
+                    f"Magsimula sa {a}, at magbilang pabalik ng {b}: {steps_str}. Ang sagot ay {ans}.",
                     f"Simula {a} -> {steps_str}"
                 )
             return (

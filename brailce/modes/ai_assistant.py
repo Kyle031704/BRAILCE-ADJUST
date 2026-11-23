@@ -42,6 +42,15 @@ FILIPINO_AI_OFFLINE_RESPONSES = {
     "kailan naimbento ang braille": "Naimbento ang sistemang Braille noong taong 1824.",
     "ano ang grade 1 braille": "Ang Grade 1 Braille ay titik-sa-titik na pagsasalin kung saan bawat karakter ay may katumbas na titik nang walang pagpapaikli.",
     "ilang tuldok mayroon sa isang braille cell": "Mayroong anim na nakataas na tuldok ang isang karaniwang Braille cell sa dalawang hanay.",
+    "ilang araw sa isang linggo": "Mayroong pitong araw sa isang linggo: Linggo, Lunes, Martes, Miyerkules, Huwebes, Biyernes, at Sabado.",
+    "ilang araw mayroon sa isang linggo": "Mayroong pitong araw sa isang linggo: Linggo, Lunes, Martes, Miyerkules, Huwebes, Biyernes, at Sabado.",
+    "ilan ang araw sa isang linggo": "Mayroong pitong araw sa isang linggo: Linggo, Lunes, Martes, Miyerkules, Huwebes, Biyernes, at Sabado.",
+    "ano ang mga araw sa isang linggo": "Ang mga araw sa isang linggo ay Linggo, Lunes, Martes, Miyerkules, Huwebes, Biyernes, at Sabado.",
+    "mga araw sa isang linggo": "Ang pitong araw sa isang linggo ay Linggo, Lunes, Martes, Miyerkules, Huwebes, Biyernes, at Sabado.",
+    "ano ang linggo": "Ang linggo ay may pitong araw mula Linggo hanggang Sabado, at ito rin ang unang araw ng sanlinggo.",
+    "linggo": "Mayroong pitong araw sa isang linggo: Linggo, Lunes, Martes, Miyerkules, Huwebes, Biyernes, at Sabado.",
+    "ilang buwan mayroon sa isang taon": "Mayroong labindalawang buwan sa isang taon mula Enero hanggang Disyembre.",
+    "ilang buwan sa isang taon": "Mayroong labindalawang buwan sa isang taon mula Enero hanggang Disyembre.",
     "ano ang buwan": "Ang Buwan ay ang likas na satelayt na umiikot sa planetang Daigdig.",
     "ano ang araw": "Ang Araw ay ang bituin sa gitna ng ating sistemang solar na nagbibigay ng liwanag at init.",
     "ano ang pambansang ibon ng pilipinas": "Ang Agila ng Pilipinas ang ating pambansang ibon.",
@@ -217,6 +226,13 @@ class AIAssistantMode(BaseMode):
         if self.app.display:
             self.app.display.show_ai_processing(query)
 
+        # Speak the submitted question/phrase immediately so learner hears what was sent
+        if self.app.speech:
+            if self.state.language == "fil":
+                self.app.speech.speak_response_text(query, interrupt=True, allow_ai_cache=False, lang="fil")
+            else:
+                self.app.speech.speak_text(query, interrupt=True)
+
         # Start background thread for Ollama inference
         self._cancel_event.clear()
         threading.Thread(target=self._process_query, args=(query,), daemon=True).start()
@@ -228,6 +244,9 @@ class AIAssistantMode(BaseMode):
         if self._cancel_event.is_set():
             return
 
+        if self.app.speech:
+            self.app.speech.speak_text(get_string("AI_THINKING", lang), interrupt=False)
+
         # Check for pre-cached offline Filipino AI responses first
         if lang == "fil":
             clean_q = re.sub(r"[^a-zA-Z0-9\s]", "", query.replace("-", " ")).strip().lower()
@@ -237,9 +256,6 @@ class AIAssistantMode(BaseMode):
                 logger.info("AI: Instant offline response matched for '%s'", clean_q)
                 self._finish_processing(resp, query=query)
                 return
-
-        if self.app.speech:
-            self.app.speech.speak_text(get_string("AI_THINKING", lang), interrupt=False)
 
         if not hasattr(self.app, "ai_client") or not self.app.ai_client:
             self._finish_processing(get_string("AI_UNAVAILABLE", lang), query=query)
