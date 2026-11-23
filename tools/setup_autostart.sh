@@ -21,7 +21,23 @@ SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}"
 # Locate project root directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-PYTHON_EXEC="$(which python3)"
+
+# Locate Python Virtual Environment (so luma.lcd, spidev, and rpi-lgpio are always used)
+PYTHON_EXEC=""
+for candidate in \
+    "${PROJECT_ROOT}/venv/bin/python3" \
+    "${PROJECT_ROOT}/../venv/bin/python3" \
+    "/home/${SUDO_USER:-$USER}/venv/bin/python3" \
+    "/home/raspberrypi-5/venv/bin/python3" \
+    "$HOME/venv/bin/python3"; do
+    if [ -x "$candidate" ]; then
+        PYTHON_EXEC="$candidate"
+        break
+    fi
+done
+if [ -z "$PYTHON_EXEC" ]; then
+    PYTHON_EXEC="$(which python3)"
+fi
 
 # Handle command-line flags
 case "$1" in
@@ -57,6 +73,16 @@ echo ""
 if [ "$EUID" -ne 0 ] && ! command -v sudo >/dev/null 2>&1; then
     echo "ERROR: This script requires root or sudo privileges to create a system service."
     exit 1
+fi
+
+# Ensure SPI is enabled in config.txt for the 3.5" ILI9488 TFT display
+CONFIG_TXT="/boot/firmware/config.txt"
+if [ ! -f "$CONFIG_TXT" ]; then
+    CONFIG_TXT="/boot/config.txt"
+fi
+if [ -f "$CONFIG_TXT" ] && ! grep -q "^dtparam=spi=on" "$CONFIG_TXT"; then
+    echo "dtparam=spi=on" | sudo tee -a "$CONFIG_TXT" >/dev/null
+    echo "✓ Enabled SPI in $CONFIG_TXT for TFT display."
 fi
 
 # Check for Ollama to set dependency
