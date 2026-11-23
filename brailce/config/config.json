@@ -6,7 +6,8 @@
     },
 
     "input": {
-        "device": "keyboard"
+        "device": "keyboard",
+        "usb_name_match": ""
     },
 
     "braille": {

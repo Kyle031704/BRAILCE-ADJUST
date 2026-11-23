@@ -251,15 +251,26 @@ class KeyboardInputDevice(InputDevice):
 
     def _on_key_press(self, event: "keyboard.KeyboardEvent") -> None:  # type: ignore[name-defined]
         """
-        Handle a raw keyboard event.
+        Handle a raw keyboard event (from the `keyboard` library hook).
 
-        Converts the laptop key into the corresponding logical
-        InputEvent and dispatches it.
+        Delegates to _dispatch_key_name, the shared key-name dispatch
+        used by the hook, terminal, and evdev paths alike.
         """
         if not self._running:
             return
 
-        key_name: str = event.name or ""
+        self._dispatch_key_name(event.name or "")
+
+    def _dispatch_key_name(self, key_name: str) -> None:
+        """
+        Convert a normalized key name (e.g. "a", "f1", "space", "ctrl+q")
+        into the corresponding logical InputEvent and dispatch it.
+
+        This is the single shared dispatch for every input path
+        (keyboard-library hook, terminal stdin, and evdev USB reader).
+        """
+        if not self._running:
+            return
 
         # ---- Control keys ----
         if key_name.lower() == "esc":
@@ -269,6 +280,10 @@ class KeyboardInputDevice(InputDevice):
             return
 
         if key_name.lower() == "ctrl+q":
+            self._emit_event(control_event(EventType.QUIT, self.SOURCE_NAME))
+            return
+
+        if key_name.lower() == "ctrl+c":
             self._emit_event(control_event(EventType.QUIT, self.SOURCE_NAME))
             return
 

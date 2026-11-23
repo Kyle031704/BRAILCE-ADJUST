@@ -13,7 +13,43 @@ Brailce is a portable **Raspberry Pi 5** assistive learning device for visually 
 | **AI Assistant** | Offline Ollama (`lfm2.5-1.2b-instruct`) Q&A with bilingual guardrails and clean spoken normalization | Question input + `Enter` |
 | **Scanner Mode** | Offline classical dot-level Grade 1 Braille camera scanner with live presence detection and letter -> word readout | Position sheet, `Enter` to scan/repeat, any key to stop, `Clear` to reset |
 
-Desktop controls during simulation: `A–Z`, `0–9`, `+ - * /`, `Space`, `Enter`, `Backspace`, `F1` (Mode), `F2` (Clear), `F3` (Language EN/FIL), `F11`/`F12` (Volume Down/Up), `Esc` (Stop speech/readout/AI request), `Ctrl+C` or `Ctrl+Q` (Quit).
+Desktop/PuTTY controls: `A-Z`, `0-9`, `+ - * /`, `Space`, `Enter`, `Backspace`, `F1` (Mode), `F2` (Language EN/FIL), `F3` (Clear), `F11`/`F12` (Volume Down/Up), `Esc` (Stop speech/readout/AI request), `Ctrl+C` or `Ctrl+Q` (Quit). The SAME mapping applies to a USB keyboard plugged directly into the Pi - see below.
+
+---
+
+## Direct USB Keyboard (No SSH)
+
+A USB keyboard plugged directly into the Pi drives the app **without any SSH/PuTTY session**. Power on the Pi with `brailce.service` enabled, plug the USB keyboard in (before or after boot - hotplug is detected within ~5 s), and type.
+
+- Under the systemd service (no TTY) the input layer AUTO-selects the direct `/dev/input` reader (`python-evdev`, listed in `requirements-pi.txt`). Each keyboard is GRABbed (EVIOCGRAB) so keystrokes never leak into the Linux console, and the reader re-enumerates every 5 s so the keyboard can be plugged in before or after boot without restarting the service.
+- PuTTY/SSH is now optional (debugging only); the terminal stdin path only engages when a real TTY is attached.
+
+### Key -> Action Mapping (identical for USB keyboard, PuTTY, and laptop keyboard)
+
+| USB key | Action |
+|---------|--------|
+| `A`-`Z` | Type letter |
+| `0`-`9` (top row + numpad) | Type digit |
+| `.` `,` `!` `?` `'` `"` `:` `;` `#` `+` `-` `*` `/` `=` | Type punctuation / math symbol (Shift row included) |
+| `Space` | Space / pronounce the completed word |
+| `Enter` | Confirm / submit (top row + numpad) |
+| `Backspace` | Delete last character |
+| `F1` or `Tab` | Change mode (Free Input -> Math -> AI -> Scanner) |
+| `F2`, `` ` `` or `~` | Toggle language (EN <-> FIL) |
+| `F3` or `Delete` | Clear the buffer |
+| `F11` / `F12` | Volume down / volume up |
+| `Esc` | Stop speech / scanner readout / AI request |
+| `Ctrl+C` or `Ctrl+Q` | Quit the app |
+
+Quick language toggle: press `Backspace`+`Space` (or `Space`+`Backspace`) within 0.35 s.
+
+### Config knobs (`brailce/config/config.json`, `input` section)
+
+- `"device"`:
+  - `"keyboard"` (default): AUTO - direct USB evdev input when available (headless-safe, never blocks on stdin), else the legacy keyboard-hook/terminal simulation.
+  - `"evdev"`: force the direct `/dev/input` USB path.
+  - `"terminal"`: force the legacy keyboard hook + terminal stdin path.
+- `"usb_name_match"`: optional case-insensitive substring filter on the USB keyboard device name (e.g. `"Logitech"`); empty = accept any keyboard.
 
 ---
 

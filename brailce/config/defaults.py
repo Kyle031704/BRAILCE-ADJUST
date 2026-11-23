@@ -22,8 +22,15 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
     # ---- Input ----
     "input": {
-        # "keyboard" for laptop simulation, "gpio" for Raspberry Pi hardware
+        # "keyboard" (default): AUTO - direct USB /dev/input input (evdev)
+        #     when available (headless-safe, no SSH needed), else the
+        #     keyboard hook/terminal simulation; "evdev" forces the direct
+        #     USB path; "terminal" forces the hook/terminal path;
+        #     "gpio" for Raspberry Pi hardware keypad (future)
         "device": "keyboard",
+        # Optional substring filter on the USB keyboard device name for the
+        # direct evdev path ("" = accept any keyboard)
+        "usb_name_match": "",
         # GPIO pin assignments — only used when device == "gpio"
         "gpio_pins": {
             "mode": None,

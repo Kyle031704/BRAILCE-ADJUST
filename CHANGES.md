@@ -374,3 +374,23 @@ Two device requirements: (1) letters/words the user types must render ALL LOWERC
 - New tests: `brailce/tests/test_power.py` (15: sysfs capacity/status reads incl. Charging/Full/Not charging/Unknown, missing files -> no data, unreadable capacity via monkeypatched open -> no data, supplies without capacity skipped, first-with-capacity wins, invalid/clamped capacity, auto picks sysfs/else simulated, runtime re-probe) and `brailce/tests/test_battery_poller.py` (14: threshold announce once per crossing, hysteresis re-arm at +5, no boot announce below threshold, charging-state re-arm, upward crossings while charging, FIL wording, interrupt=False, boot-while-charging announce, full once per session + via status text + not while discharging, 30 s guard, display/state updates, no-data skip, thread lifecycle) - 29 passed.
 - Targeted set (touched files + app/config/state/esc/mode-manager/filipino-math): **249 passed / 2 failed** - both failures proven pre-existing at HEAD via git-stash round-trip (assert `speech.speak` while the fil path uses `speak_response_text`).
 - Full suite: **626 passed / 6 failed / 1 skipped**; all 6 failures identical at HEAD (pre-existing, unrelated: AI/fil AI/fil math speech-routing assertions x3, Filipino keypress crash x2, OBR synthetic vision accuracy x1). `py_compile` OK on all changed .py. SCOPE untouched: pronunciation banks, scanner, piper/filipino engine internals, ALSA/scripts, AI/camera/vision logic.
+### Section L - Direct USB Keyboard Input: Headless No-SSH Operation (2026-11-23)
+
+#### WHY
+The user plugs a customized USB keyboard (standard USB HID keycodes) directly into the Pi 5 and must drive the Braille app with it WITHOUT any SSH/PuTTY session. Under the `brailce.service` systemd unit neither existing path worked: the `keyboard`-library hook silently failed (`keyboard` was never in `requirements-pi.txt`), and the raw-terminal stdin listener never started because systemd gives the service `/dev/null` as stdin (`isatty()` is False). USB input headlessly was impossible.
+
+#### FIX - Direct /dev/input path + headless auto-selection
+- New `brailce/input/evdev_input.py`: `EvdevInputDevice(KeyboardInputDevice)` reads USB keyboards directly via python-evdev (`/dev/input/event*`): enumerates devices with EV_KEY codes 1..126 (mice excluded), GRABs each (no console leak), translates keycodes to the SAME key names the hook/terminal paths use, and dispatches through the new shared `KeyboardInputDevice._dispatch_key_name` - identical behavior everywhere (Esc -> STOP_PRESSED, Ctrl+C/Ctrl+Q -> QUIT, F1 Mode, F2 Language, F3 Clear, F11/F12 Volume, characters). Modifier tracking handles ctrl/shift/alt (Shift-row symbols included). Hotplug tolerant: re-enumerates every 5 s with no keyboard and after read errors; never crashes without a device.
+- `brailce/input/keyboard_input.py`: `_on_key_press` now delegates to a shared `_dispatch_key_name(key_name)` (single dispatch for hook, terminal, and evdev paths); `ctrl+c` added next to `ctrl+q` as a QUIT key.
+- `brailce/core/app.py`: input device built by `create_input_device(config)`; `"keyboard"` (default) AUTO-selects the evdev device headless (no TTY) or when a USB keyboard is present, `"evdev"` forces it, `"terminal"` forces the legacy path. Terminal stdin only engages with a real TTY - PuTTY is now optional debugging.
+- Config: new `input.usb_name_match` (optional device-name substring filter; "" = any keyboard) in `defaults.py` + `config.json`. `requirements-pi.txt` gains `evdev>=1.6.0`.
+
+#### USAGE WITHOUT SSH
+1. On the Pi: `pip install -r requirements-pi.txt` (adds evdev), keep `input.device: "keyboard"`.
+2. Reboot (or `systemctl restart brailce`) with the service enabled.
+3. Plug the USB keyboard in any time (before or after boot; detected within ~5 s) and type - `A-Z`, `0-9`, math/punctuation, `Space`, `Enter`, `Backspace`, `F1` mode, `F2` language, `F3` clear, `F11`/`F12` volume, `Esc` stop, `Ctrl+C`/`Ctrl+Q` quit. No SSH needed.
+
+#### VERIFIED
+- New `brailce/tests/test_evdev_input.py`: 59 tests (translation incl. Esc -> STOP_PRESSED and Ctrl+C -> QUIT, modifiers, auto-selection with mocked evdev, no-device resilience, GRAB + name-filter enumeration) - all pass with evdev fully mocked (runs on any host).
+- Existing suites re-run: `test_input.py` (27), `test_esc_stops.py` (30), `test_configuration.py` (27), plus the `app.setup()`-dependent `test_math_mode.py` (14), `test_speech_service.py` (20), `test_audio_audit.py` (5) - ALL PASS. `py_compile` OK on every changed .py.
+- SCOPE untouched: speech/audio banks, scanner, display, battery, ALSA/scripts, modes logic.

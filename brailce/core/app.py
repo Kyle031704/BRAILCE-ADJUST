@@ -29,7 +29,7 @@ from brailce.core.state import ApplicationState
 from brailce.display.base import DisplayDevice
 from brailce.display.console_display import ConsoleDisplay
 from brailce.input.base import InputDevice
-from brailce.input.keyboard_input import KeyboardInputDevice
+from brailce.input.evdev_input import create_input_device
 from brailce.braille.mapping import BrailleMappingService
 from brailce.braille.encoder import BrailleEncoder
 from brailce.modes.ai_assistant import AIAssistantMode
@@ -92,20 +92,12 @@ class BrailceApp:
         logger.info("Brailce application setup starting...")
 
         # ---- Input Device ----
-        device_type = self.config.input_device
-        if device_type == "keyboard":
-            self.input_device = KeyboardInputDevice(
-                mode_getter=lambda: self.state.mode
-            )
-        else:
-            logger.warning(
-                "Input device '%s' not available — "
-                "falling back to keyboard simulation.",
-                device_type,
-            )
-            self.input_device = KeyboardInputDevice(
-                mode_getter=lambda: self.state.mode
-            )
+        # "keyboard" (default) AUTO-selects the direct USB /dev/input path
+        # (evdev) for headless systemd operation (no SSH needed); "evdev"
+        # forces it and "terminal" forces the legacy hook/stdin path.
+        self.input_device = create_input_device(
+            self.config, mode_getter=lambda: self.state.mode
+        )
 
         self.input_device.register_callback(self._on_input_event)
 
