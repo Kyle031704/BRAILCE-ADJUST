@@ -432,6 +432,13 @@ class OBREngine:
             return image
         try:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image.copy()
+            # Guard against flat blank paper: if no local contrast features exist, do not amplify sensor noise
+            gray_f = gray.astype(np.float32)
+            g0 = cv2.GaussianBlur(gray_f, (0, 0), 1.0)
+            g1 = cv2.GaussianBlur(gray_f, (0, 0), 2.0)
+            if float(np.max(np.abs(g1 - g0))) < 2.5:
+                return image
+
             clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
             cl = clahe.apply(gray)
             kh = min(15, cl.shape[0] - (1 - cl.shape[0] % 2))
@@ -471,7 +478,7 @@ class OBREngine:
             return False, "no_braille", 0.0
 
         lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-        if lap_var < 2.0:
+        if lap_var < 0.5:
             return False, "blurry", lap_var
 
         return True, "ok", lap_var
@@ -508,6 +515,11 @@ class OBREngine:
         dog1_l = np.clip(g1 - g2, 0.0, 255.0)
         dog2_l = np.clip(g2 - g3, 0.0, 255.0)
         light_resp = np.maximum(np.maximum(dog0_l, dog1_l), dog2_l)
+
+        # Quick exit for flat blank paper with no local contrast features
+        max_resp = max(float(dark_resp.max()), float(light_resp.max())) if dark_resp.size > 0 else 0.0
+        if max_resp < 2.5:
+            return [], 0.0
 
         # Robust thresholding: Braille dots typically occupy < 2% of the page
         p98_d = float(np.percentile(dark_resp, 98.0))
