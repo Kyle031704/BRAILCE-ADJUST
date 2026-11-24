@@ -780,6 +780,20 @@ class FilipinoEngine:
             if os.path.isfile(target_wav) and os.path.getsize(target_wav) > 1000:
                 return AudioDeviceCoordinator.play_wav_file(target_wav, owner="filipino", timeout=45.0)
 
+        # 7. Fallback to English/Piper engine if offline Filipino synthesis cannot produce audio (loanwords/English flashcards)
+        if self.fallback_speech is not None:
+            engine = getattr(self.fallback_speech, "_text_engine", None) or getattr(self.fallback_speech, "_engine", None) or self.fallback_speech
+            if hasattr(engine, "speak"):
+                from brailce.speech.piper_engine import normalize_for_piper
+                norm = normalize_for_piper(trimmed)
+                logger.info("FilipinoEngine: Falling back to English/Piper speech for %r (normalized: %r)", trimmed, norm)
+                engine.speak(norm)
+                return True
+            elif hasattr(engine, "speak_text"):
+                logger.info("FilipinoEngine: Falling back to speech.speak_text for %r", trimmed)
+                engine.speak_text(trimmed, interrupt=False)
+                return True
+
         logger.warning("FilipinoEngine: Unable to synthesize offline Filipino speech for %r", trimmed)
         return False
 

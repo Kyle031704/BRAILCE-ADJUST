@@ -752,6 +752,8 @@ class ScannerMode(BaseMode):
                 if not cur_has_unknown:
                     self._stop_readout_event.wait(self._get_word_pause_s())
                 self._speak_completed_word(cur_word, cur_has_unknown)
+                if not self._stop_readout_event.is_set():
+                    self._stop_readout_event.wait(1.5)
                 if self._scanned_frame is not None and hasattr(display, "show_camera_preview") and overlays:
                     for ov in overlays:
                         ov["active"] = False

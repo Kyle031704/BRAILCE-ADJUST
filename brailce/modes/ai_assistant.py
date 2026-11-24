@@ -230,6 +230,8 @@ class AIAssistantMode(BaseMode):
         if self.app.speech:
             if self.state.language == "fil":
                 self.app.speech.speak_response_text(query, interrupt=True, allow_ai_cache=False, lang="fil")
+            elif hasattr(self.app.speech, "speak_sentence"):
+                self.app.speech.speak_sentence(query, interrupt=False)
             else:
                 self.app.speech.speak_text(query, interrupt=True)
 
