@@ -644,12 +644,12 @@ class OBREngine:
         dot-to-dot pitch p_dot directly from nearest-neighbor vectors.
         """
         if len(dots) < 4:
-            return 0.0, max(12.0, dot_diam * 2.5)
+            return 0.0, max(8.0, dot_diam * 2.5)
 
         pts = np.array([[d["x"], d["y"]] for d in dots], dtype=np.float64)
         n = len(pts)
 
-        # 1. Direct Nearest-Neighbor p_dot measurement (scale-invariant from 15px to 80px+)
+        # 1. Direct Nearest-Neighbor p_dot measurement (scale-invariant from 8px to 120px)
         nn_dists: List[float] = []
         for i in range(n):
             diffs = pts - pts[i]
@@ -662,9 +662,9 @@ class OBREngine:
             nns = np.array(sorted(nn_dists))
             # Dynamic scale-invariant dot pitch from 25th-40th percentile of valid nearest-neighbor distances
             p_dot = float(np.percentile(nns, 35))
-            p_dot = max(12.0, min(120.0, p_dot))
+            p_dot = max(8.0, min(120.0, p_dot))
         else:
-            p_dot = max(12.0, dot_diam * 2.5)
+            p_dot = max(8.0, dot_diam * 2.5)
 
         # 2. Skew estimation from orthogonal neighbor vectors around 1.0 * p_dot
         angles_deg: List[float] = []
@@ -799,7 +799,7 @@ class OBREngine:
                 if i + 1 < len(sub_cols):
                     col_next_x = float(np.mean([d["rx"] for d in sub_cols[i + 1]]))
                     gap = col_next_x - col_i_x
-                    if 0.60 * p_dot <= gap <= 1.38 * p_dot:
+                    if 0.65 * p_dot <= gap <= 1.38 * p_dot:
                         # 2-column cell (Column 0 and Column 1)
                         cell_groups.append({
                             "col0": sub_cols[i],
@@ -815,7 +815,7 @@ class OBREngine:
                 if cell_groups:
                     prev_end = cell_groups[-1]["x_end"]
                     gap_from_prev = col_i_x - prev_end
-                    if 1.75 * p_dot <= gap_from_prev <= 2.85 * p_dot:
+                    if 1.85 * p_dot <= gap_from_prev <= 2.85 * p_dot:
                         is_col1 = True
 
                 if is_col1:
@@ -870,10 +870,10 @@ class OBREngine:
                 return [(sorted_d[0], max(0, min(2, r0)))]
 
             for c_idx, cell in enumerate(cell_groups):
-                # Detect word space between cells
+                # Detect word space between cells (space gap >= 3.8 * p_dot)
                 if c_idx > 0:
                     space_gap = cell["x_start"] - cell_groups[c_idx - 1]["x_end"]
-                    if space_gap >= max(p_dot * 1.85, p_cell * 0.85):
+                    if space_gap >= 3.8 * p_dot:
                         line_str += " "
                         is_number = False
                         is_capital = False
@@ -1169,8 +1169,8 @@ class OBREngine:
 
         skew_deg, p_dot = self._estimate_skew_and_pitch(dots, dot_diam)
 
-        # Distance thresholding based on physical Braille geometry
-        if dot_diam < 2.5 or p_dot < 11.0:
+        # Distance thresholding based on physical Braille geometry (8px to 55px dot pitch)
+        if dot_diam < 2.0 or p_dot < 8.0:
             state = "too_far"
         elif dot_diam > 18.0 or p_dot > 55.0:
             state = "too_close"

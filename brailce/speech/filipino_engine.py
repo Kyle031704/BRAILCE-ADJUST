@@ -767,24 +767,26 @@ class FilipinoEngine:
                 return AudioDeviceCoordinator.play_wav_file(ai_path, owner="filipino", timeout=30.0)
 
         # 4. Hash cache for full sentences / math explanations / AI replies
-        for candidate_key in (norm_key, trimmed.strip().lower()):
-            h = hashlib.md5(candidate_key.encode("utf-8")).hexdigest()
-            cached_sentence = os.path.join(cache_dir, f"sentence_{h}.wav")
-            if os.path.isfile(cached_sentence) and os.path.getsize(cached_sentence) > 1000:
-                logger.info("FilipinoEngine: Playing hash-cached sentence (%s)", cached_sentence)
-                return AudioDeviceCoordinator.play_wav_file(cached_sentence, owner="filipino", timeout=30.0)
+        for candidate_key in (norm_key, trimmed.strip().lower(), trimmed):
+            h_sha1 = hashlib.sha1(candidate_key.encode("utf-8")).hexdigest()
+            h_md5 = hashlib.md5(candidate_key.encode("utf-8")).hexdigest()
+            for h in (f"sentence_{h_sha1}.wav", f"sentence_{h_md5}.wav"):
+                cached_sentence = os.path.join(cache_dir, h)
+                if os.path.isfile(cached_sentence) and os.path.getsize(cached_sentence) > 1000:
+                    logger.info("FilipinoEngine: Playing hash-cached sentence (%s)", cached_sentence)
+                    return AudioDeviceCoordinator.play_wav_file(cached_sentence, owner="filipino", timeout=45.0)
 
-        # 5. Whole-phrase/sentence offline synthesis via sherpa-onnx for natural prosody
-        h_main = hashlib.md5(norm_key.encode("utf-8")).hexdigest()
+        # 5. Whole-phrase/sentence synthesis: Edge-TTS fil-PH-BlessicaNeural (rate='-5%') saved to sentence_<sha1>.wav
+        h_main = hashlib.sha1(trimmed.encode("utf-8")).hexdigest()
         target_wav = os.path.join(cache_dir, f"sentence_{h_main}.wav")
         if self.synthesize_to_wav(trimmed, target_wav):
             if os.path.isfile(target_wav) and os.path.getsize(target_wav) > 1000:
-                return AudioDeviceCoordinator.play_wav_file(target_wav, owner="filipino", timeout=30.0)
+                return AudioDeviceCoordinator.play_wav_file(target_wav, owner="filipino", timeout=45.0)
 
-        # 6. Fallback: Seamless concatenated sentence with natural juncture pauses
+        # 6. Fallback (strictly if offline and sentence is not in cache): Seamless concatenated word WAVs
         if self._play_offline_concatenated_sentence(trimmed, target_wav):
             if os.path.isfile(target_wav) and os.path.getsize(target_wav) > 1000:
-                return AudioDeviceCoordinator.play_wav_file(target_wav, owner="filipino", timeout=30.0)
+                return AudioDeviceCoordinator.play_wav_file(target_wav, owner="filipino", timeout=45.0)
 
         logger.warning("FilipinoEngine: Unable to synthesize offline Filipino speech for %r", trimmed)
         return False
@@ -849,9 +851,9 @@ class FilipinoEngine:
                 comm = edge_tts.Communicate(
                     clean,
                     "fil-PH-BlessicaNeural",
-                    rate="-4%",
-                    connect_timeout=2,
-                    receive_timeout=3,
+                    rate="-5%",
+                    connect_timeout=6,
+                    receive_timeout=10,
                 )
                 data = bytearray()
                 async def _stream():
@@ -859,7 +861,7 @@ class FilipinoEngine:
                         if chunk["type"] == "audio":
                             data.extend(chunk["data"])
                     return bytes(data)
-                return await asyncio.wait_for(_stream(), timeout=2.5)
+                return await asyncio.wait_for(_stream(), timeout=12.0)
 
             loop = asyncio.new_event_loop()
             try:

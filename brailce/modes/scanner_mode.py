@@ -35,7 +35,7 @@ class ScannerMode(BaseMode):
 
     # Presence detection tuning (~3-4 Hz)
     PRESENCE_POLL_S: float = 0.28
-    PRESENCE_POSITIVE_FRAMES: int = 3
+    PRESENCE_POSITIVE_FRAMES: int = 2
     PRESENCE_NEGATIVE_FRAMES: int = 4
     ANNOUNCEMENT_COOLDOWN_S: float = 6.0
 
@@ -236,8 +236,9 @@ class ScannerMode(BaseMode):
                     dist_info = obr.assess_braille_distance(roi_frame, confidence_threshold=conf_threshold)
                     conf = dist_info.get("confidence", 0.0)
                     dot_count = dist_info.get("dot_count", 0)
-                    # Must have at least 6 aligned dots inside ROI box before triggering distance guidance
-                    if dot_count >= 6 and conf >= conf_threshold:
+                    dot_pitch = dist_info.get("dot_pitch", 0.0)
+                    # Gate: dot_count >= 5 AND 8.0 <= dot_pitch <= 55.0 AND conf >= conf_threshold
+                    if dot_count >= 5 and (8.0 <= dot_pitch <= 55.0) and conf >= conf_threshold:
                         detected = True
                         distance_state = dist_info.get("state", "no_braille")
                     else:
