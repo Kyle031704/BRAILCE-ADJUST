@@ -529,7 +529,7 @@ class ScannerMode(BaseMode):
             for cand in candidates:
                 self._scanned_frame = cand
                 # Center-Strip ROI: process ROI window matching the LCD reticle while supporting multi-line clustering
-                res = self.app.obr.process_image(cand, full_frame=False)
+                res = self.app.obr.process_image(cand, full_frame=False, embossed_only=True)
                 if res.get("readable") and str(res.get("text", "")).strip():
                     best_result = res
                     best_frame = cand
@@ -542,7 +542,7 @@ class ScannerMode(BaseMode):
             # Full-frame fallback if center-strip ROI did not yield readable text (e.g. card slightly off-center)
             if not (best_result and best_result.get("readable") and str(best_result.get("text", "")).strip()):
                 for cand in candidates:
-                    res_full = self.app.obr.process_image(cand, full_frame=True)
+                    res_full = self.app.obr.process_image(cand, full_frame=True, embossed_only=True)
                     if res_full.get("readable") and str(res_full.get("text", "")).strip():
                         best_result = res_full
                         best_frame = cand

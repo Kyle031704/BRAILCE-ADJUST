@@ -505,7 +505,7 @@ class OBREngine:
         return True, "ok", lap_var
 
     @staticmethod
-    def detect_dots(image: np.ndarray) -> Tuple[List[Dict[str, float]], float]:
+    def detect_dots(image: np.ndarray, embossed_only: bool = False) -> Tuple[List[Dict[str, float]], float]:
         """
         Detect embossed or printed Braille dots across a wide scale range (4px to 20px)
         using multi-scale Difference of Gaussians (DoG). Robustly merges paired
@@ -540,6 +540,155 @@ class OBREngine:
         # Robust thresholding: Braille dots typically occupy < 2% of the page
         p98_d = float(np.percentile(dark_resp, 98.0))
         p98_l = float(np.percentile(light_resp, 98.0))
+
+        if embossed_only:
+            # Erase handwritten/printed ink strokes first so DoG never rings on pencil/pen text
+            ksize = max(15, min(41, (min(h, w) // 5) | 1))
+            bg = cv2.medianBlur(gray, ksize).astype(np.float32)
+            ink_dark = ((bg - gray_f) > 15.0).astype(np.uint8) * 255
+            num_ink, labels_ink, stats_ink, _ = cv2.connectedComponentsWithStats(ink_dark, connectivity=8)
+            ink_mask = np.zeros_like(gray, dtype=np.uint8)
+            for i in range(1, num_ink):
+                area_i = float(stats_ink[i, cv2.CC_STAT_AREA])
+                bw_i = float(stats_ink[i, cv2.CC_STAT_WIDTH])
+                bh_i = float(stats_ink[i, cv2.CC_STAT_HEIGHT])
+                max_dim = max(bw_i, bh_i)
+                min_dim = max(1.0, min(bw_i, bh_i))
+                aspect_i = max_dim / min_dim
+                x0_i, y0_i = int(stats_ink[i, cv2.CC_STAT_LEFT]), int(stats_ink[i, cv2.CC_STAT_TOP])
+                pad = 6
+                ry1, ry2 = max(0, y0_i - pad), min(h, y0_i + int(bh_i) + pad)
+                rx1, rx2 = max(0, x0_i - pad), min(w, x0_i + int(bw_i) + pad)
+                patch_diff = gray_f[ry1:ry2, rx1:rx2] - bg[ry1:ry2, rx1:rx2]
+                bright_peak = float(np.max(patch_diff))
+                dark_depth = float(-np.min(patch_diff))
+                touches_edge = (y0_i <= 3) or (y0_i + int(bh_i) >= h - 3)
+                if (
+                    max_dim > 22.0
+                    or (aspect_i > 2.1 and max_dim > 12.0)
+                    or area_i > 250.0
+                    or (touches_edge and dark_depth > 18.0 and bright_peak < 10.0)
+                    or (dark_depth > 22.0 and bright_peak < max(6.0, dark_depth * 0.25))
+                ):
+                    ink_mask[labels_ink == i] = 255
+
+            clean_gray = gray_f.copy()
+            if np.any(ink_mask > 0):
+                ink_mask = cv2.dilate(ink_mask, np.ones((3, 3), np.uint8), iterations=1)
+                clean_gray[ink_mask > 0] = bg[ink_mask > 0]
+                g0 = cv2.GaussianBlur(clean_gray, (0, 0), 1.0)
+                g1 = cv2.GaussianBlur(clean_gray, (0, 0), 2.0)
+                g2 = cv2.GaussianBlur(clean_gray, (0, 0), 4.0)
+                g3 = cv2.GaussianBlur(clean_gray, (0, 0), 8.0)
+                dark_resp = np.maximum(np.maximum(np.clip(g1 - g0, 0.0, 255.0), np.clip(g2 - g1, 0.0, 255.0)), np.clip(g3 - g2, 0.0, 255.0))
+                light_resp = np.maximum(np.maximum(np.clip(g0 - g1, 0.0, 255.0), np.clip(g1 - g2, 0.0, 255.0)), np.clip(g2 - g3, 0.0, 255.0))
+                p98_d = float(np.percentile(dark_resp, 98.0))
+                p98_l = float(np.percentile(light_resp, 98.0))
+
+            thresh_d = max(2.2, p98_d * 0.34)
+            thresh_l = max(2.0, p98_l * 0.36)
+
+            # 1. Collect dark shadow blobs and light highlight blobs separately
+            dark_list: List[Dict[str, float]] = []
+            mask_d = (dark_resp >= thresh_d).astype(np.uint8)
+            num_d, _, stats_d, cents_d = cv2.connectedComponentsWithStats(mask_d, connectivity=8)
+            for lbl in range(1, num_d):
+                area = float(stats_d[lbl, cv2.CC_STAT_AREA])
+                bw = float(stats_d[lbl, cv2.CC_STAT_WIDTH])
+                bh = float(stats_d[lbl, cv2.CC_STAT_HEIGHT])
+                if area < 6.0 or bw < 2.0 or bh < 2.0 or bw > (w * 0.08) or bh > (h * 0.08):
+                    continue
+                if min(bw, bh) / max(1e-6, max(bw, bh)) < 0.35:
+                    continue
+                cx, cy = float(cents_d[lbl][0]), float(cents_d[lbl][1])
+                diam = math.sqrt(4.0 * area / math.pi)
+                dark_list.append({"x": cx, "y": cy, "d": diam, "area": area, "score": float(dark_resp[int(cy), int(cx)])})
+
+            light_list: List[Dict[str, float]] = []
+            mask_l = (light_resp >= thresh_l).astype(np.uint8)
+            num_l, _, stats_l, cents_l = cv2.connectedComponentsWithStats(mask_l, connectivity=8)
+            for lbl in range(1, num_l):
+                area = float(stats_l[lbl, cv2.CC_STAT_AREA])
+                bw = float(stats_l[lbl, cv2.CC_STAT_WIDTH])
+                bh = float(stats_l[lbl, cv2.CC_STAT_HEIGHT])
+                if area < 6.0 or bw < 2.0 or bh < 2.0 or bw > (w * 0.08) or bh > (h * 0.08):
+                    continue
+                if min(bw, bh) / max(1e-6, max(bw, bh)) < 0.35:
+                    continue
+                cx, cy = float(cents_l[lbl][0]), float(cents_l[lbl][1])
+                diam = math.sqrt(4.0 * area / math.pi)
+                light_list.append({"x": cx, "y": cy, "d": diam, "area": area, "score": float(light_resp[int(cy), int(cx)])})
+
+            # 2. Pair shadow + highlight of the SAME embossed dome to its true center
+            all_d_vals = [b["d"] for b in (dark_list + light_list)]
+            est_d0 = float(np.median(all_d_vals)) if all_d_vals else 8.0
+            pair_r = max(10.0, est_d0 * 1.55)
+
+            embossed_cands: List[Dict[str, float]] = []
+            used_l_idx = set()
+            for d_b in dark_list:
+                best_li = None
+                best_dist = float("inf")
+                for li, l_b in enumerate(light_list):
+                    if li in used_l_idx:
+                        continue
+                    dist = math.hypot(d_b["x"] - l_b["x"], d_b["y"] - l_b["y"])
+                    if dist <= pair_r and dist < best_dist:
+                        best_dist = dist
+                        best_li = li
+                if best_li is not None:
+                    l_b = light_list[best_li]
+                    used_l_idx.add(best_li)
+                    cx = (d_b["x"] + l_b["x"]) / 2.0
+                    cy = (d_b["y"] + l_b["y"]) / 2.0
+                    diam = (d_b["d"] + l_b["d"]) / 2.0
+                    area = max(d_b["area"], l_b["area"])
+                    score = d_b["score"] + l_b["score"]
+                else:
+                    cx, cy, diam, area, score = d_b["x"], d_b["y"], d_b["d"], d_b["area"], d_b["score"]
+
+                r_search = int(max(5, round(diam * 1.3)))
+                y1, y2 = max(0, int(cy) - r_search), min(h, int(cy) + r_search + 1)
+                x1, x2 = max(0, int(cx) - r_search), min(w, int(cx) + r_search + 1)
+                local_l_max = float(np.max(light_resp[y1:y2, x1:x2]))
+                bright_above_bg = float(np.max(clean_gray[y1:y2, x1:x2] - bg[y1:y2, x1:x2]))
+                dark_below_bg = float(np.max(bg[y1:y2, x1:x2] - clean_gray[y1:y2, x1:x2]))
+                # Reject flat handwriting edge artifacts (deep dark, weak highlight)
+                if local_l_max >= 1.2 and bright_above_bg >= max(1.8, dark_below_bg * 0.12):
+                    embossed_cands.append({"x": cx, "y": cy, "d": diam, "score": score, "area": area})
+
+            # 3. Include remaining unpaired light-dominant domes (e.g. top-lit dots with faint shadow)
+            for li, l_b in enumerate(light_list):
+                if li in used_l_idx:
+                    continue
+                cx, cy, diam, area, score = l_b["x"], l_b["y"], l_b["d"], l_b["area"], l_b["score"]
+                r_search = int(max(5, round(diam * 1.3)))
+                y1, y2 = max(0, int(cy) - r_search), min(h, int(cy) + r_search + 1)
+                x1, x2 = max(0, int(cx) - r_search), min(w, int(cx) + r_search + 1)
+                local_d_max = float(np.max(dark_resp[y1:y2, x1:x2]))
+                bright_above_bg = float(np.max(clean_gray[y1:y2, x1:x2] - bg[y1:y2, x1:x2]))
+                if local_d_max >= 1.0 and bright_above_bg >= 2.0:
+                    embossed_cands.append({"x": cx, "y": cy, "d": diam, "score": score + local_d_max, "area": area})
+
+            if not embossed_cands:
+                return [], 0.0
+            if len(embossed_cands) >= 4:
+                med_a = float(np.median([b["area"] for b in embossed_cands]))
+                embossed_cands = [b for b in embossed_cands if 0.35 * med_a <= b["area"] <= 2.6 * med_a]
+            if not embossed_cands:
+                return [], 0.0
+            est_d = float(np.median([b["d"] for b in embossed_cands]))
+            embossed_cands.sort(key=lambda d: d["score"], reverse=True)
+            final_dots_e: List[Dict[str, float]] = []
+            # Ensure one dome never produces two dots (shadow + highlight are ~8-12px apart; real dots are ~22-30px apart)
+            suppress_r = max(8.0, est_d * 1.15)
+            for cand in embossed_cands:
+                if any(math.hypot(cand["x"] - ex["x"], cand["y"] - ex["y"]) <= suppress_r for ex in final_dots_e):
+                    continue
+                final_dots_e.append(cand)
+            final_d_e = float(np.median([d["d"] for d in final_dots_e])) if final_dots_e else 0.0
+            return final_dots_e, final_d_e
+
         thresh_d = max(4.0, p98_d * 0.42)
         thresh_l = max(4.0, p98_l * 0.42)
 
@@ -622,9 +771,9 @@ class OBREngine:
                     cy = (d_blob["y"] + l_match["y"]) / 2.0
                     dot_d = (d_blob["d"] + l_match["d"]) / 2.0
                     paired_dots.append({"x": cx, "y": cy, "d": dot_d, "score": d_blob["score"] + l_match["score"]})
-                else:
+                elif not embossed_only:
                     paired_dots.append({"x": d_blob["x"], "y": d_blob["y"], "d": d_blob["d"], "score": d_blob["score"]})
-            else:
+            elif not embossed_only:
                 # Solid ink dot or top-lit spot
                 paired_dots.append({"x": d_blob["x"], "y": d_blob["y"], "d": d_blob["d"], "score": d_blob["score"]})
 
@@ -810,17 +959,25 @@ class OBREngine:
                 else:
                     i += 1
 
-            p_cell = p_dot * 2.4
+            p_cell = p_dot * 2.55
             if len(pairs) >= 2:
                 diffs = [pairs[j + 1][0] - pairs[j][0] for j in range(len(pairs) - 1)]
                 cands = []
                 for df in diffs:
                     for k in range(1, 10):
                         pitch = df / k
-                        if 2.1 * p_dot <= pitch <= 2.7 * p_dot:
+                        if 2.0 * p_dot <= pitch <= 3.15 * p_dot:
                             cands.append(pitch)
                 if cands:
                     p_cell = float(np.median(cands))
+            elif len(col_xs) >= 2:
+                col_cands = [
+                    col_xs[j + 1] - col_xs[j]
+                    for j in range(len(col_xs) - 1)
+                    if 2.2 * p_dot <= (col_xs[j + 1] - col_xs[j]) <= 3.15 * p_dot
+                ]
+                if col_cands:
+                    p_cell = float(np.median(col_cands))
 
             x0 = pairs[0][0] if pairs else col_xs[0]
 
@@ -1160,7 +1317,7 @@ class OBREngine:
     def _save_scan_history(target_frame: np.ndarray, readable: bool, text: str, reason: str) -> None:
         """
         Saves last_scan.jpg AND timestamped scan history file (scan_YYYYMMDD_HHMMSS_<tag>.jpg).
-        Caps history at the latest 30 scans to protect Raspberry Pi storage.
+        Caps history at the latest 200 scans to protect Raspberry Pi storage.
         Updates debug_scan/index.html so users can view all scans via any web browser.
         """
         if target_frame is None or getattr(target_frame, "size", 0) == 0:
@@ -1187,12 +1344,12 @@ class OBREngine:
             hist_path = os.path.join(debug_dir, hist_filename)
             cv2.imwrite(hist_path, target_frame)
 
-            # 3. Retention pruning: keep newest 30 scans
+            # 3. Retention pruning: keep newest 200 scans
             all_scans = sorted(
                 [f for f in os.listdir(debug_dir) if f.startswith("scan_") and f.endswith(".jpg")],
                 reverse=True,
             )
-            for old_file in all_scans[30:]:
+            for old_file in all_scans[200:]:
                 try:
                     os.remove(os.path.join(debug_dir, old_file))
                 except Exception:
@@ -1263,6 +1420,7 @@ p.sub {{ text-align: center; color: #aaa; margin-bottom: 24px; }}
         image: np.ndarray,
         debug_dump: bool = False,
         full_frame: Optional[bool] = None,
+        embossed_only: bool = False,
     ) -> Dict[str, Any]:
         """
         Decode physical Braille image using quality gates + classical dot-grid recognizer:
@@ -1318,13 +1476,14 @@ p.sub {{ text-align: center; color: #aaa; margin-bottom: 24px; }}
         clean_crop = self.suppress_printed_ink(crop)
 
         # 3. Detect dots directly (preserves true geometric crescent pairs)
-        dots, dot_diam = self.detect_dots(clean_crop)
+        dots, dot_diam = self.detect_dots(clean_crop, embossed_only=embossed_only)
 
         # 3b. Adaptive contrast enhancement fallback for faint dots under diffuse lighting
         if len(dots) < 8:
             enhanced_crop = self.enhance_contrast(clean_crop)
-            e_dots, e_diam = self.detect_dots(enhanced_crop)
-            if len(e_dots) > len(dots) and len(e_dots) <= 2500 and e_diam >= 2.0:
+            e_dots, e_diam = self.detect_dots(enhanced_crop, embossed_only=embossed_only)
+            max_allowed = max(45, len(dots) * 6) if embossed_only else 2500
+            if len(e_dots) > len(dots) and len(e_dots) <= max_allowed and e_diam >= 2.0:
                 dots, dot_diam = e_dots, e_diam
 
         # Automatic center-crop fallback if full frame produced < 2 dots
@@ -1335,9 +1494,9 @@ p.sub {{ text-align: center; color: #aaa; margin-bottom: 24px; }}
             c_y0 = (h - c_roi_h) // 2
             c_crop = image[c_y0 : c_y0 + c_roi_h, c_x0 : c_x0 + c_roi_w].copy()
             clean_c = self.suppress_printed_ink(c_crop)
-            c_dots, c_diam = self.detect_dots(clean_c)
+            c_dots, c_diam = self.detect_dots(clean_c, embossed_only=embossed_only)
             if 0 < len(c_dots) < 8:
-                c_dots_e, c_diam_e = self.detect_dots(self.enhance_contrast(clean_c))
+                c_dots_e, c_diam_e = self.detect_dots(self.enhance_contrast(clean_c), embossed_only=embossed_only)
                 if len(c_dots_e) > len(c_dots):
                     c_dots, c_diam = c_dots_e, c_diam_e
             if len(c_dots) >= 2:
