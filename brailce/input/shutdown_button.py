@@ -135,17 +135,11 @@ class ShutdownButton(InputDevice):
         self._emit_event(control_event(EventType.POWER_BUTTON_PRESSED, self.SOURCE_NAME))
 
     def _on_held(self) -> None:
-        """gpiozero hold callback: route SHUTDOWN_PRESSED when hold mode is allowed."""
+        """gpiozero hold callback: route SHUTDOWN_PRESSED on long press."""
         if not self._running:
             return
-        if not self._require_backspace:
-            logger.info(
-                "GPIO shutdown button held %.1f s (hold mode) - emitting SHUTDOWN_PRESSED.",
-                self._hold_seconds,
-            )
-            self._emit_event(control_event(EventType.SHUTDOWN_PRESSED, self.SOURCE_NAME))
-        else:
-            logger.debug(
-                "GPIO power button held %.1f s (awaiting Backspace combo)",
-                self._hold_seconds,
-            )
+        logger.info(
+            "GPIO power button long-pressed (%.1f s) - emitting SHUTDOWN_PRESSED.",
+            self._hold_seconds,
+        )
+        self._emit_event(control_event(EventType.SHUTDOWN_PRESSED, self.SOURCE_NAME))
