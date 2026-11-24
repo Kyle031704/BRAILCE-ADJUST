@@ -123,6 +123,14 @@ class TestClassicalOBRWordsAndResilience:
         assert res["readable"] is True
         assert res["text"] == "HELLO"
 
+    def test_flat_overhead_room_light_resilience(self) -> None:
+        """Verify that faint embossed Braille under flat overhead lighting (contrast_scale=0.30) decodes accurately."""
+        engine = OBREngine()
+        img = render_shaded_braille("need", contrast_scale=0.30)
+        res = engine.process_image(img)
+        assert res["readable"] is True, f"Failed flat lighting: {res}"
+        assert res["text"] == "NEED"
+
 
 class TestClassicalOBRQualityGatesAndUnknowns:
     """Verify failure diagnostics and zero fabricated guesses on invalid cells."""

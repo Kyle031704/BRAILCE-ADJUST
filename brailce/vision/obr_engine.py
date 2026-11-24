@@ -448,7 +448,7 @@ class OBREngine:
             gray_f = gray.astype(np.float32)
             g0 = cv2.GaussianBlur(gray_f, (0, 0), 1.0)
             g1 = cv2.GaussianBlur(gray_f, (0, 0), 2.0)
-            if float(np.max(np.abs(g1 - g0))) < 2.5:
+            if float(np.max(np.abs(g1 - g0))) < 1.0:
                 return image
 
             clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
@@ -491,7 +491,14 @@ class OBREngine:
 
         lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
         if lap_var < 4.0:
-            return False, "blurry", lap_var
+            # Under flat room lighting without rake lighting, smooth white paper has low raw lap_var (1.0-4.0).
+            # Evaluate if adaptive contrast (CLAHE) reveals in-focus micro-edges.
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+            cl = clahe.apply(gray)
+            enh_lap = float(cv2.Laplacian(cl, cv2.CV_64F).var())
+            if lap_var < 1.0 or enh_lap < 11.0:
+                return False, "blurry", lap_var
+            lap_var = max(lap_var, enh_lap * 0.35)
 
         return True, "ok", lap_var
 
@@ -996,8 +1003,8 @@ class OBREngine:
 
             med_pitch = float(np.median(nn_dists))
             pitch_ratio = med_pitch / max(1.0, med_d)
-            # Gate 5: pitch-ratio range
-            if not (1.2 <= pitch_ratio <= 7.0):
+            # Gate 5: pitch-ratio range (extended to 0.85 to accommodate diffuse flat-lit dot dilation)
+            if not (0.85 <= pitch_ratio <= 7.5):
                 return 0.0
 
             # Score 7: grid regularity (fraction within ±40% of median pitch)
@@ -1161,10 +1168,10 @@ class OBREngine:
         dots, dot_diam = self.detect_dots(clean_crop)
 
         # 3b. Adaptive contrast enhancement fallback for faint dots under diffuse lighting
-        if 0 < len(dots) < 8:
+        if len(dots) < 8:
             enhanced_crop = self.enhance_contrast(clean_crop)
             e_dots, e_diam = self.detect_dots(enhanced_crop)
-            if len(e_dots) > len(dots):
+            if len(e_dots) > len(dots) and len(e_dots) <= 2500 and e_diam >= 2.0:
                 dots, dot_diam = e_dots, e_diam
 
         # Automatic center-crop fallback if full frame produced < 2 dots
@@ -1202,7 +1209,10 @@ class OBREngine:
         if len(dots) < 2 or (0 < dot_diam < 3.8):
             res_reason = "too_small" if (0 < dot_diam < 3.8) else "no_braille"
             cv2.putText(dbg_img, f"UNREADABLE: {res_reason}", (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 255), 2)
-            for dbg_path in ("/tmp/last_scan_debug.jpg", "debug_scan/last_scan.jpg"):
+            dbg_paths = ["debug_scan/last_scan.jpg"]
+            if os.name != "nt":
+                dbg_paths.append("/tmp/last_scan_debug.jpg")
+            for dbg_path in dbg_paths:
                 try:
                     os.makedirs(os.path.dirname(os.path.abspath(dbg_path)), exist_ok=True)
                     cv2.imwrite(dbg_path, dbg_img)
@@ -1317,8 +1327,11 @@ class OBREngine:
         header_color = (0, 255, 0) if readable else (0, 0, 255)
         cv2.putText(target_dbg_frame, header_txt, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75, header_color, 2)
 
-        # Save debug image to both /tmp/last_scan_debug.jpg and debug_scan/last_scan.jpg
-        for dbg_path in ("/tmp/last_scan_debug.jpg", "debug_scan/last_scan.jpg"):
+        # Save debug image to debug_scan/last_scan.jpg (and /tmp on Linux)
+        dbg_paths = ["debug_scan/last_scan.jpg"]
+        if os.name != "nt":
+            dbg_paths.append("/tmp/last_scan_debug.jpg")
+        for dbg_path in dbg_paths:
             try:
                 os.makedirs(os.path.dirname(os.path.abspath(dbg_path)), exist_ok=True)
                 cv2.imwrite(dbg_path, target_dbg_frame)
