@@ -539,6 +539,15 @@ class ScannerMode(BaseMode):
                     best_result = res
                     best_frame = cand
 
+            # Full-frame fallback if center-strip ROI did not yield readable text (e.g. card slightly off-center)
+            if not (best_result and best_result.get("readable") and str(best_result.get("text", "")).strip()):
+                for cand in candidates:
+                    res_full = self.app.obr.process_image(cand, full_frame=True)
+                    if res_full.get("readable") and str(res_full.get("text", "")).strip():
+                        best_result = res_full
+                        best_frame = cand
+                        break
+
             self._scanned_frame = best_frame
             result = best_result or {"readable": False, "reason": "no_braille"}
 

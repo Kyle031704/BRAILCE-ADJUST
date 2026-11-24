@@ -652,14 +652,29 @@ class OBREngine:
 
         # 1. Direct Nearest-Neighbor p_dot measurement (scale-invariant from 8px to 120px)
         nn_dists: List[float] = []
+        nn_angles: List[float] = []
         for i in range(n):
             diffs = pts - pts[i]
             d = np.hypot(diffs[:, 0], diffs[:, 1])
-            d = d[d > 3.0]
-            if len(d):
-                nn_dists.append(float(np.min(d)))
+            d_valid = d[d > 3.0]
+            if len(d_valid):
+                min_idx = int(np.where(d == np.min(d_valid))[0][0])
+                dx, dy = diffs[min_idx]
+                ang = math.degrees(math.atan2(dy, dx))
+                folded = abs(((ang + 45.0) % 90.0) - 45.0)
+                nn_dists.append(float(np.min(d_valid)))
+                nn_angles.append(folded)
 
-        p_dot = float(np.median(nn_dists)) if nn_dists else max(12.0, dot_diam * 2.5)
+        med_p = float(np.median(nn_dists)) if nn_dists else max(12.0, dot_diam * 2.5)
+        med_ang = float(np.median(nn_angles)) if nn_angles else 0.0
+
+        # If nearest-neighbor vectors are diagonally oriented (>22 deg folded),
+        # the median distance was dominated by diagonal (sqrt(2)*p_dot) pairs (e.g. letters O, E, I).
+        # Recover true orthogonal p_dot.
+        if med_ang > 22.0:
+            p_dot = med_p / math.sqrt(2.0)
+        else:
+            p_dot = med_p
 
         # 2. Skew estimation from orthogonal neighbor vectors around 1.0 * p_dot
         angles_deg: List[float] = []
