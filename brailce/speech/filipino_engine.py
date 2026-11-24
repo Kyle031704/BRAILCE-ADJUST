@@ -827,9 +827,86 @@ class FilipinoEngine:
             self._sherpa_tts = None
             return None
 
+    def _synthesize_edge_blessica(self, text: str, out_wav_path: str) -> bool:
+        """
+        Synthesize full Filipino sentence with fil-PH-BlessicaNeural via Edge-TTS,
+        resample to 22050 Hz mono s16, RMS-normalized, with standard pre/post silence.
+        """
+        if not text:
+            return False
+        clean = text.strip()
+        if not clean:
+            return False
+        try:
+            import asyncio
+            import edge_tts
+            import miniaudio
+            import numpy as np
+
+            async def _run():
+                comm = edge_tts.Communicate(clean, "fil-PH-BlessicaNeural", rate="-4%")
+                data = bytearray()
+                async for chunk in comm.stream():
+                    if chunk["type"] == "audio":
+                        data.extend(chunk["data"])
+                return bytes(data)
+
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                        audio_bytes = pool.submit(asyncio.run, _run()).result(timeout=15.0)
+                else:
+                    audio_bytes = loop.run_until_complete(_run())
+            except RuntimeError:
+                audio_bytes = asyncio.run(_run())
+
+            if not audio_bytes:
+                return False
+
+            dec = miniaudio.decode(audio_bytes)
+            samples = np.array(dec.samples, dtype=np.float64)
+            sr = dec.sample_rate
+
+            target_sr = TARGET_SAMPLE_RATE  # 22050
+            if sr != target_sr:
+                target_len = int(round(len(samples) * target_sr / sr))
+                from scipy import signal
+                samples = signal.resample(samples, target_len)
+                sr = target_sr
+
+            pcm_int16 = np.clip(np.round(samples), -32767, 32767).astype(np.int16)
+            os.makedirs(os.path.dirname(os.path.abspath(out_wav_path)), exist_ok=True)
+            with wave.open(out_wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(target_sr)
+                wf.writeframes(pcm_int16.tobytes())
+
+            if os.path.isfile(out_wav_path) and os.path.getsize(out_wav_path) > 1000:
+                return standardize_wav_file(
+                    out_wav_path,
+                    target_sr=target_sr,
+                    pre_ms=DEFAULT_PRE_SILENCE_MS,
+                    post_ms=DEFAULT_POST_SILENCE_MS,
+                )
+        except Exception as exc:
+            logger.debug("Edge-TTS fil-PH-BlessicaNeural synthesis failed for %r: %s", text, exc)
+            return False
+        return False
+
     def synthesize_to_wav(self, text: str, out_wav_path: str) -> bool:
-        """Public alias to synthesize Filipino text cleanly to a standardized 22050Hz WAV."""
-        return self._synthesize_sherpa_filipino(text, out_wav_path)
+        """
+        Synthesize full Filipino sentence with natural prosody.
+        1. Primary: Edge-TTS fil-PH-BlessicaNeural (warm female voice, natural cadence).
+        2. Secondary offline fallback: sherpa-onnx MMS-TTS tgl VITS if installed.
+        """
+        if self._synthesize_edge_blessica(text, out_wav_path):
+            return True
+        if self._synthesize_sherpa_filipino(text, out_wav_path):
+            return True
+        return False
 
     def _synthesize_sherpa_filipino(self, text: str, out_wav_path: str) -> bool:
         """
@@ -936,23 +1013,22 @@ class FilipinoEngine:
             return False
 
         framerate = TARGET_SAMPLE_RATE
-        # Natural inter-word spacing (~35-50ms juncture) so speech flows smoothly without choppy cuts
-        word_pause_ms = min(50, max(35, getattr(self, "word_gap_ms", 40)))
-        gap_samples = int(framerate * (word_pause_ms / 1000.0))
-        gap_word = b"\x00\x00" * gap_samples
-        gap_comma = b"\x00\x00" * int(framerate * (getattr(self, "comma_pause_ms", 180) / 1000.0))
-        gap_period = b"\x00\x00" * int(framerate * (getattr(self, "sentence_pause_ms", 300) / 1000.0))
+        # Seamless concatenative fallback: 0ms gap + 10ms crossfade between consecutive words
+        crossfade_samples = int(framerate * 0.010)
+        gap_comma = np.zeros(int(framerate * (getattr(self, "comma_pause_ms", 140) / 1000.0)), dtype=np.int16)
+        gap_period = np.zeros(int(framerate * (getattr(self, "sentence_pause_ms", 240) / 1000.0)), dtype=np.int16)
         gap_semicolon = gap_comma
 
-        combined_pcm = bytearray()
+        all_samples = np.array([], dtype=np.int16)
         import numpy as np
 
         for clause, delim in clauses:
             norm_clause = normalize_for_sherpa_filipino(clause)
             words = norm_clause.split()
+            clause_samples = np.array([], dtype=np.int16)
             for j, w in enumerate(words):
                 cached_wav = get_filipino_word_path(w)
-                pcm_data = None
+                word_arr = None
                 if not cached_wav or not os.path.isfile(cached_wav):
                     # Out-of-vocabulary fallback: synthesize single word
                     tmp_word_wav = os.path.join(_find_filipino_audio_dir(), f"word_{w}.wav")
@@ -964,46 +1040,54 @@ class FilipinoEngine:
                         with wave.open(cached_wav, "rb") as wf:
                             raw_frames = wf.readframes(wf.getnframes())
                         arr = np.frombuffer(raw_frames, dtype=np.int16).copy()
-                        # Clean silence trimming preserving natural onset and smooth conversational junctures
                         peak_val = np.max(np.abs(arr)) if arr.size > 0 else 0
                         sil_thresh = max(180, int(peak_val * 0.035))
                         nz = np.where(np.abs(arr) > sil_thresh)[0]
                         if nz.size > 0:
-                            lead_pad = int(framerate * 0.012)
-                            is_internal = (j < len(words) - 1)
-                            tail_pad_ms = 0.025 if is_internal else 0.035
-                            tail_pad = int(framerate * tail_pad_ms)
+                            lead_pad = int(framerate * 0.005)
+                            tail_pad = int(framerate * 0.010)
                             start_idx = max(0, nz[0] - lead_pad)
                             end_idx = min(len(arr), nz[-1] + 1 + tail_pad)
                             trimmed = arr[start_idx:end_idx].copy()
-                            # 6-8ms smooth cosine fade at edges to prevent clicks without cutting phonemes
-                            mf_len = min(int(framerate * 0.007), len(trimmed) // 4)
-                            if mf_len > 1:
-                                mf_in = 0.5 * (1.0 - np.cos(np.linspace(0, np.pi, mf_len)))
-                                mf_out = 0.5 * (1.0 + np.cos(np.linspace(0, np.pi, mf_len)))
-                                trimmed[:mf_len] = (trimmed[:mf_len].astype(np.float64) * mf_in).astype(np.int16)
-                                trimmed[-mf_len:] = (trimmed[-mf_len:].astype(np.float64) * mf_out).astype(np.int16)
-                            pcm_data = trimmed.tobytes()
+                            word_arr = trimmed
                         else:
-                            pcm_data = raw_frames
+                            word_arr = arr
                     except Exception:
-                        pcm_data = None
+                        word_arr = None
 
-                if pcm_data:
-                    combined_pcm.extend(pcm_data)
-                    if j < len(words) - 1:
-                        combined_pcm.extend(gap_word)
+                if word_arr is not None and len(word_arr) > 0:
+                    if len(clause_samples) == 0:
+                        clause_samples = word_arr.copy()
+                    else:
+                        # 0ms silence gap + 10ms crossfade to eliminate choppy word-by-word pause
+                        cf_len = min(crossfade_samples, len(clause_samples), len(word_arr))
+                        if cf_len > 1:
+                            fade_out = np.linspace(1.0, 0.0, cf_len)
+                            fade_in = np.linspace(0.0, 1.0, cf_len)
+                            blended = (
+                                clause_samples[-cf_len:].astype(np.float64) * fade_out
+                                + word_arr[:cf_len].astype(np.float64) * fade_in
+                            ).astype(np.int16)
+                            clause_samples = np.concatenate([clause_samples[:-cf_len], blended, word_arr[cf_len:]])
+                        else:
+                            clause_samples = np.concatenate([clause_samples, word_arr])
+
+            if len(clause_samples) > 0:
+                if len(all_samples) == 0:
+                    all_samples = clause_samples
+                else:
+                    all_samples = np.concatenate([all_samples, clause_samples])
 
             if any(c in delim for c in ".?!\n"):
-                combined_pcm.extend(gap_period)
+                all_samples = np.concatenate([all_samples, gap_period])
             elif any(c in delim for c in ","):
-                combined_pcm.extend(gap_comma)
+                all_samples = np.concatenate([all_samples, gap_comma])
             elif any(c in delim for c in ";:"):
-                combined_pcm.extend(gap_semicolon)
+                all_samples = np.concatenate([all_samples, gap_semicolon])
             elif any(c in delim for c in ",;:"):
-                combined_pcm.extend(gap_comma)
+                all_samples = np.concatenate([all_samples, gap_comma])
 
-        if not combined_pcm:
+        if len(all_samples) == 0:
             return False
 
         try:
@@ -1011,7 +1095,7 @@ class FilipinoEngine:
                 wf_out.setnchannels(1)
                 wf_out.setsampwidth(2)
                 wf_out.setframerate(framerate)
-                wf_out.writeframes(combined_pcm)
+                wf_out.writeframes(all_samples.tobytes())
 
             return standardize_wav_file(
                 out_wav_path,

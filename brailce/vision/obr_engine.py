@@ -427,15 +427,25 @@ class OBREngine:
 
     @staticmethod
     def enhance_contrast(image: np.ndarray) -> np.ndarray:
-        """Flatten uneven paper lighting and enhance embossed dot contrast via CLAHE."""
+        """Flatten uneven paper lighting and enhance embossed dot contrast via CLAHE + Top-Hat / Black-Hat."""
         if image is None or cv2 is None or image.size == 0:
             return image
         try:
-            lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-            l, a, b = cv2.split(lab)
-            clahe = cv2.createCLAHE(clipLimit=2.8, tileGridSize=(8, 8))
-            cl = clahe.apply(l)
-            return cv2.cvtColor(cv2.merge((cl, a, b)), cv2.COLOR_LAB2BGR)
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image.copy()
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+            cl = clahe.apply(gray)
+            kh = min(15, cl.shape[0] - (1 - cl.shape[0] % 2))
+            kw = min(15, cl.shape[1] - (1 - cl.shape[1] % 2))
+            kh = max(5, kh if kh % 2 == 1 else kh - 1)
+            kw = max(5, kw if kw % 2 == 1 else kw - 1)
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kw, kh))
+            tophat = cv2.morphologyEx(cl, cv2.MORPH_TOPHAT, kernel)
+            blackhat = cv2.morphologyEx(cl, cv2.MORPH_BLACKHAT, kernel)
+            enhanced = cv2.add(cl, tophat)
+            enhanced = cv2.subtract(enhanced, blackhat)
+            if len(image.shape) == 3:
+                return cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
+            return enhanced
         except Exception:
             return image
 
@@ -522,6 +532,9 @@ class OBREngine:
             if aspect < 0.32:
                 continue
             cx, cy = float(cents_d[lbl][0]), float(cents_d[lbl][1])
+            # Reject border cutoff artifacts
+            if cx < 3.5 or cx > (w - 4.5) or cy < 3.5 or cy > (h - 4.5):
+                continue
             diam = math.sqrt(4.0 * area / math.pi)
             score = float(dark_resp[int(cy), int(cx)]) if 0 <= int(cy) < h and 0 <= int(cx) < w else 1.0
             dark_blobs.append({"x": cx, "y": cy, "d": diam, "score": score, "area": area})
@@ -539,6 +552,9 @@ class OBREngine:
             if aspect < 0.32:
                 continue
             cx, cy = float(cents_l[lbl][0]), float(cents_l[lbl][1])
+            # Reject border cutoff artifacts
+            if cx < 3.5 or cx > (w - 4.5) or cy < 3.5 or cy > (h - 4.5):
+                continue
             diam = math.sqrt(4.0 * area / math.pi)
             score = float(light_resp[int(cy), int(cx)]) if 0 <= int(cy) < h and 0 <= int(cx) < w else 1.0
             light_blobs.append({"x": cx, "y": cy, "d": diam, "score": score, "area": area})
@@ -746,77 +762,94 @@ class OBREngine:
                     else:
                         sub_cols.append([d])
 
-            col_xs = [float(np.mean([d["rx"] for d in sc])) for sc in sub_cols]
-
-            # Find paired columns (dx in [0.70 * p_dot, 1.30 * p_dot] with tolerance for stylus-and-slate)
-            # Intra-cell column gap is ~1.0 * p_dot, whereas inter-cell gap is >= 1.4 * p_dot.
-            pairs: List[Tuple[float, float]] = []
-            i = 0
-            while i < len(col_xs) - 1:
-                dx = col_xs[i + 1] - col_xs[i]
-                if 0.70 * p_dot <= dx <= 1.30 * p_dot:
-                    pairs.append((col_xs[i], col_xs[i + 1]))
-                    i += 2
-                else:
-                    i += 1
-
             p_cell = p_dot * 2.45
-            if len(pairs) >= 2:
-                diffs = [pairs[j + 1][0] - pairs[j][0] for j in range(len(pairs) - 1)]
-                cands = [df / k for df in diffs for k in range(1, 15) if 1.9 * p_dot <= (df / k) <= 3.2 * p_dot]
-                if cands:
-                    p_cell = float(np.median(cands))
-            elif len(col_xs) >= 2:
-                diffs = [col_xs[j + 1] - col_xs[j] for j in range(len(col_xs) - 1)]
+            if len(sub_cols) >= 2:
+                # Estimate p_cell dynamically from neighbor column gaps
+                diffs = [
+                    float(np.mean([d["rx"] for d in sub_cols[j + 1]]))
+                    - float(np.mean([d["rx"] for d in sub_cols[j]]))
+                    for j in range(len(sub_cols) - 1)
+                ]
                 cands = [df / k for df in diffs for k in range(1, 15) if 1.9 * p_dot <= (df / k) <= 3.2 * p_dot]
                 if cands:
                     p_cell = float(np.median(cands))
 
-            if pairs:
-                x0 = pairs[0][0]
-                if col_xs and col_xs[0] < (x0 - 0.4 * p_dot):
-                    n_shifts = max(1, int(round((x0 - col_xs[0]) / p_cell)))
-                    x0 -= n_shifts * p_cell
-            else:
-                x0 = col_xs[0] if col_xs else 0.0
+            # Group sub-columns into 2-column Braille cells using X-coordinate clustering
+            cell_groups: List[Dict[str, Any]] = []
+            i = 0
+            while i < len(sub_cols):
+                col_i_x = float(np.mean([d["rx"] for d in sub_cols[i]]))
+                if i + 1 < len(sub_cols):
+                    col_next_x = float(np.mean([d["rx"] for d in sub_cols[i + 1]]))
+                    gap = col_next_x - col_i_x
+                    if 0.60 * p_dot <= gap <= 1.38 * p_dot:
+                        # 2-column cell (Column 0 and Column 1)
+                        cell_groups.append({
+                            "col0": sub_cols[i],
+                            "col1": sub_cols[i + 1],
+                            "x_start": col_i_x,
+                            "x_end": col_next_x,
+                            "center_x": (col_i_x + col_next_x) / 2.0,
+                        })
+                        i += 2
+                        continue
+                # 1-column cell: check if column 0 or column 1
+                is_col1 = False
+                if cell_groups:
+                    prev_end = cell_groups[-1]["x_end"]
+                    gap_from_prev = col_i_x - prev_end
+                    if 1.75 * p_dot <= gap_from_prev <= 2.85 * p_dot:
+                        is_col1 = True
 
-            # Assign each dot to (cell_k, col in {0, 1}, row in {0, 1, 2})
-            # Decision boundary between cell k and k+1 is midway between col 1 and next col 0:
-            # col 1 is at 1.0 * p_dot, next col 0 is at p_cell (~2.4 * p_dot). Midpoint = (p_cell + p_dot) / 2
-            half_gap = 0.5 * (p_cell - p_dot)
-            cells_bits: Dict[int, List[int]] = {}
-            for d in line_dots:
-                dx = d["rx"] - x0
-                k = int(math.floor((dx + half_gap) / p_cell))
-                x_cell = x0 + k * p_cell
-                rem = d["rx"] - x_cell
-                col = 0 if rem < (0.5 * p_dot) else 1
-                row = int(round((d["ry"] - best_y0) / p_dot))
-                row = max(0, min(2, row))
-                bits = cells_bits.setdefault(k, [0, 0, 0, 0, 0, 0])
-                bits[col * 3 + row] = 1
+                if is_col1:
+                    cell_groups.append({
+                        "col0": [],
+                        "col1": sub_cols[i],
+                        "x_start": col_i_x - p_dot,
+                        "x_end": col_i_x,
+                        "center_x": col_i_x - 0.5 * p_dot,
+                    })
+                else:
+                    cell_groups.append({
+                        "col0": sub_cols[i],
+                        "col1": [],
+                        "x_start": col_i_x,
+                        "x_end": col_i_x + p_dot,
+                        "center_x": col_i_x + 0.5 * p_dot,
+                    })
+                i += 1
 
             line_str = ""
             is_number = False
             is_capital = False
-            prev_k: Optional[int] = None
 
-            for k in sorted(cells_bits.keys()):
-                if prev_k is not None and (k - prev_k) > 1:
-                    line_str += " "
-                    is_number = False
-                    is_capital = False
-                    word_idx += 1
-                prev_k = k
+            for c_idx, cell in enumerate(cell_groups):
+                # Detect word space between cells
+                if c_idx > 0:
+                    space_gap = cell["x_start"] - cell_groups[c_idx - 1]["x_end"]
+                    if space_gap >= p_cell * 1.25:
+                        line_str += " "
+                        is_number = False
+                        is_capital = False
+                        word_idx += 1
 
-                bits = cells_bits[k]
+                bits = [0, 0, 0, 0, 0, 0]
+                for d in cell["col0"]:
+                    row = int(round((d["ry"] - best_y0) / p_dot))
+                    row = max(0, min(2, row))
+                    bits[0 * 3 + row] = 1
+                for d in cell["col1"]:
+                    row = int(round((d["ry"] - best_y0) / p_dot))
+                    row = max(0, min(2, row))
+                    bits[1 * 3 + row] = 1
+
                 bit_str = "".join(str(b) for b in bits)
                 char = cls.BINARY_DICT.get(bit_str, UNKNOWN_CELL_CHAR)
                 active_dots = [idx + 1 for idx, b in enumerate(bits) if b == 1]
                 dots_str = "Dots " + "-".join(str(d) for d in active_dots) if active_dots else "No dots"
 
                 # Compute unrotated visual bounding box center
-                rx_c = x0 + k * p_cell + 0.5 * p_dot
+                rx_c = cell["center_x"]
                 ry_c = best_y0 + p_dot
                 dx_c = rx_c - cx0
                 dy_c = ry_c - cy0
@@ -1178,10 +1211,15 @@ class OBREngine:
             cv2.circle(dbg_img, (px, py), r, (0, 255, 0), 1)
 
         # Always save debug image even when < 2 dots or too small
-        if len(dots) < 2 or (0 < dot_diam < 3.2):
-            os.makedirs("debug_scan", exist_ok=True)
-            cv2.imwrite("debug_scan/last_scan.jpg", dbg_img)
-            res_reason = "too_small" if (0 < dot_diam < 3.2) else "no_braille"
+        if len(dots) < 2 or (0 < dot_diam < 2.0):
+            res_reason = "too_small" if (0 < dot_diam < 2.0) else "no_braille"
+            cv2.putText(dbg_img, f"UNREADABLE: {res_reason}", (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 255), 2)
+            for dbg_path in ("/tmp/last_scan_debug.jpg", "debug_scan/last_scan.jpg"):
+                try:
+                    os.makedirs(os.path.dirname(os.path.abspath(dbg_path)), exist_ok=True)
+                    cv2.imwrite(dbg_path, dbg_img)
+                except Exception:
+                    pass
             logger.info("Scanner result: dot_count=%d dot_pitch=0.00 cells_found=0 readable=False reason=%s text=''", len(dots), res_reason)
             return {
                 "readable": False,
@@ -1236,12 +1274,16 @@ class OBREngine:
         conf = self.braille_presence_confidence(clean_crop)
         res["confidence"] = conf
 
-        # Reject if no characters decoded or high unknown ratio (>25% unknown)
+        # Reject if no characters decoded or high unknown ratio (>25% unknown) or < 6 dots
         if not str(res.get("text", "")).strip():
             res["readable"] = False
             res["reason"] = "no_braille"
             res["text"] = ""
-        elif conf < 0.35 and len(dots) < 6:
+        elif len(dots) < 6:
+            res["readable"] = False
+            res["reason"] = "no_braille"
+            res["text"] = ""
+        elif conf < 0.35 and len(dots) < 8:
             res["readable"] = False
             res["reason"] = "no_braille"
             res["text"] = ""
@@ -1264,13 +1306,40 @@ class OBREngine:
             by = int(round(b["y"] - b["h"] / 2.0))
             bw = int(round(b["w"]))
             bh = int(round(b["h"]))
-            cv2.rectangle(dbg_img, (bx, by), (bx + bw, by + bh), (0, 0, 255), 1)
+            cv2.rectangle(dbg_img, (bx, by), (bx + bw, by + bh), (0, 0, 255), 2)
             lbl = str(b.get("label", ""))
             if lbl:
-                cv2.putText(dbg_img, lbl, (bx, max(12, by - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
+                cv2.putText(dbg_img, lbl, (bx, max(14, by - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 255, 255), 2)
 
-        os.makedirs("debug_scan", exist_ok=True)
-        cv2.imwrite("debug_scan/last_scan.jpg", dbg_img)
+        readable = bool(res.get("readable", False))
+        reason = str(res.get("reason", "no_braille" if not readable else "ok"))
+        text = str(res.get("text", "")).strip()
+
+        # Build full debug visual frame (including ROI border if cropped)
+        if x0 != 0 or y0 != 0:
+            dbg_full = image.copy()
+            if len(dbg_full.shape) == 2:
+                dbg_full = cv2.cvtColor(dbg_full, cv2.COLOR_GRAY2BGR)
+            # Draw ROI border in cyan
+            cv2.rectangle(dbg_full, (x0, y0), (x0 + roi_w, y0 + roi_h), (255, 200, 0), 2)
+            # Paste rendered dbg_img into ROI
+            dbg_full[y0 : y0 + roi_h, x0 : x0 + roi_w] = dbg_img
+            target_dbg_frame = dbg_full
+        else:
+            target_dbg_frame = dbg_img
+
+        # Draw header text: DECODED: <text> or UNREADABLE: <reason>
+        header_txt = f"DECODED: {text}" if readable else f"UNREADABLE: {reason}"
+        header_color = (0, 255, 0) if readable else (0, 0, 255)
+        cv2.putText(target_dbg_frame, header_txt, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75, header_color, 2)
+
+        # Save debug image to both /tmp/last_scan_debug.jpg and debug_scan/last_scan.jpg
+        for dbg_path in ("/tmp/last_scan_debug.jpg", "debug_scan/last_scan.jpg"):
+            try:
+                os.makedirs(os.path.dirname(os.path.abspath(dbg_path)), exist_ok=True)
+                cv2.imwrite(dbg_path, target_dbg_frame)
+            except Exception as save_exc:
+                logger.debug("Failed saving debug image to %s: %s", dbg_path, save_exc)
 
         # Shift coordinates if ROI was used
         if x0 != 0 or y0 != 0:
