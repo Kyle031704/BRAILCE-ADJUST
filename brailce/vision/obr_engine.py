@@ -38,7 +38,7 @@ UNKNOWN_CELL_CHAR = "?"
 
 # Center ROI Constants (slim horizontal box for single-line Braille)
 ROI_W_FRAC: float = 0.78
-ROI_H_FRAC: float = 0.30
+ROI_H_FRAC: float = 0.38
 SHOW_ROI: bool = True
 
 
