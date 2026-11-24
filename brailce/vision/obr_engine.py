@@ -19,9 +19,11 @@ Optional secondary YOLO cell/dot detector:
 
 from __future__ import annotations
 
+import datetime
 import logging
 import math
 import os
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
@@ -665,16 +667,21 @@ class OBREngine:
                 nn_dists.append(float(np.min(d_valid)))
                 nn_angles.append(folded)
 
-        med_p = float(np.median(nn_dists)) if nn_dists else max(12.0, dot_diam * 2.5)
-        med_ang = float(np.median(nn_angles)) if nn_angles else 0.0
+        nn_dists_arr = np.array(nn_dists, dtype=np.float64) if nn_dists else np.array([], dtype=np.float64)
+        nn_angles_arr = np.array(nn_angles, dtype=np.float64) if nn_angles else np.array([], dtype=np.float64)
 
-        # If nearest-neighbor vectors are diagonally oriented (>22 deg folded),
-        # the median distance was dominated by diagonal (sqrt(2)*p_dot) pairs (e.g. letters O, E, I).
-        # Recover true orthogonal p_dot.
-        if med_ang > 22.0:
-            p_dot = med_p / math.sqrt(2.0)
+        # Priority 1: Non-diagonal nearest neighbors (filters out diagonal sqrt(2)*p_dot vectors)
+        non_diag_mask = nn_angles_arr <= 22.0
+        if np.sum(non_diag_mask) >= 2:
+            p_dot = float(np.median(nn_dists_arr[non_diag_mask]))
+        elif len(nn_dists) > 0:
+            med_ang = float(np.median(nn_angles_arr))
+            if med_ang > 22.0:
+                p_dot = float(np.median(nn_dists_arr)) / math.sqrt(2.0)
+            else:
+                p_dot = float(np.median(nn_dists_arr))
         else:
-            p_dot = med_p
+            p_dot = max(12.0, dot_diam * 2.5)
 
         # 2. Skew estimation from orthogonal neighbor vectors around 1.0 * p_dot
         angles_deg: List[float] = []
@@ -911,6 +918,33 @@ class OBREngine:
 
 
             clean_l = " ".join(line_str.split()).strip()
+            # Boundary phantom cell pruning (e.g. stray margin dot producing '? RAIN' or 'HOME ?'):
+            words_in_line = clean_l.split()
+            if len(words_in_line) >= 2:
+                # Check leading word: if single-char unknown/punctuation and next word is a multi-letter word
+                if words_in_line[0] in {UNKNOWN_CELL_CHAR, "?", "'", ",", ".", "!"} and len(words_in_line[1]) >= 2:
+                    stray_char = words_in_line[0]
+                    words_in_line = words_in_line[1:]
+                    clean_l = " ".join(words_in_line)
+                    for idx, ev in enumerate(cell_events):
+                        if ev.get("line_index") == line_idx and ev.get("char") == stray_char:
+                            cell_events.pop(idx)
+                            if idx < len(debug_boxes):
+                                debug_boxes.pop(idx)
+                            break
+                # Check trailing word: if single-char unknown/punctuation and previous word is a multi-letter word
+                if len(words_in_line) >= 2 and words_in_line[-1] in {UNKNOWN_CELL_CHAR, "?", "'", ",", ".", "!"} and len(words_in_line[-2]) >= 2:
+                    stray_char = words_in_line[-1]
+                    words_in_line = words_in_line[:-1]
+                    clean_l = " ".join(words_in_line)
+                    for idx in range(len(cell_events) - 1, -1, -1):
+                        ev = cell_events[idx]
+                        if ev.get("line_index") == line_idx and ev.get("char") == stray_char:
+                            cell_events.pop(idx)
+                            if idx < len(debug_boxes):
+                                debug_boxes.pop(idx)
+                            break
+
             if clean_l:
                 line_strings.append(clean_l)
             word_idx += 1
@@ -1122,6 +1156,108 @@ class OBREngine:
             "dot_count": len(dots),
         }
 
+    @staticmethod
+    def _save_scan_history(target_frame: np.ndarray, readable: bool, text: str, reason: str) -> None:
+        """
+        Saves last_scan.jpg AND timestamped scan history file (scan_YYYYMMDD_HHMMSS_<tag>.jpg).
+        Caps history at the latest 30 scans to protect Raspberry Pi storage.
+        Updates debug_scan/index.html so users can view all scans via any web browser.
+        """
+        if target_frame is None or getattr(target_frame, "size", 0) == 0:
+            return
+        try:
+            debug_dir = os.path.abspath("debug_scan")
+            os.makedirs(debug_dir, exist_ok=True)
+
+            # 1. Update last_scan.jpg
+            last_scan_path = os.path.join(debug_dir, "last_scan.jpg")
+            cv2.imwrite(last_scan_path, target_frame)
+            if os.name != "nt":
+                try:
+                    cv2.imwrite("/tmp/last_scan_debug.jpg", target_frame)
+                except Exception:
+                    pass
+
+            # 2. Timestamped scan history
+            now = datetime.datetime.now()
+            ts_str = now.strftime("%Y%m%d_%H%M%S")
+            clean_tag = re.sub(r"[^a-zA-Z0-9]", "", text).lower() if readable and text else reason
+            clean_tag = clean_tag[:16] if clean_tag else "scan"
+            hist_filename = f"scan_{ts_str}_{clean_tag}.jpg"
+            hist_path = os.path.join(debug_dir, hist_filename)
+            cv2.imwrite(hist_path, target_frame)
+
+            # 3. Retention pruning: keep newest 30 scans
+            all_scans = sorted(
+                [f for f in os.listdir(debug_dir) if f.startswith("scan_") and f.endswith(".jpg")],
+                reverse=True,
+            )
+            for old_file in all_scans[30:]:
+                try:
+                    os.remove(os.path.join(debug_dir, old_file))
+                except Exception:
+                    pass
+
+            # 4. Generate/update index.html gallery
+            active_scans = [f for f in os.listdir(debug_dir) if f.startswith("scan_") and f.endswith(".jpg")]
+            active_scans.sort(reverse=True)
+            cards_html = []
+            for fname in active_scans:
+                parts = fname.replace(".jpg", "").split("_", 3)
+                date_part = parts[1] if len(parts) > 1 else ""
+                time_part = parts[2] if len(parts) > 2 else ""
+                tag_part = parts[3].upper() if len(parts) > 3 else "SCAN"
+                formatted_time = (
+                    f"{date_part[:4]}-{date_part[4:6]}-{date_part[6:]} {time_part[:2]}:{time_part[2:4]}:{time_part[4:]}"
+                    if len(date_part) == 8 and len(time_part) == 6
+                    else fname
+                )
+                cards_html.append(f"""
+                <div class="card">
+                    <a href="{fname}" target="_blank"><img src="{fname}" alt="{tag_part}" /></a>
+                    <div class="info">
+                        <span class="tag">{tag_part}</span>
+                        <span class="time">{formatted_time}</span>
+                    </div>
+                </div>""")
+
+            html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Brailce Scanner History</title>
+<style>
+body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #121212; color: #eee; margin: 0; padding: 20px; }}
+h1 {{ text-align: center; color: #4CAF50; }}
+p.sub {{ text-align: center; color: #aaa; margin-bottom: 24px; }}
+.latest-banner {{ max-width: 800px; margin: 0 auto 30px auto; background: #1e1e1e; border: 2px solid #4CAF50; border-radius: 8px; padding: 16px; text-align: center; }}
+.latest-banner img {{ max-width: 100%; border-radius: 4px; }}
+.grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; max-width: 1200px; margin: 0 auto; }}
+.card {{ background: #1e1e1e; border: 1px solid #333; border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; }}
+.card img {{ width: 100%; height: 180px; object-fit: contain; background: #000; }}
+.card .info {{ padding: 12px; display: flex; justify-content: space-between; align-items: center; }}
+.card .tag {{ font-weight: bold; color: #FFEB3B; font-size: 1.1em; }}
+.card .time {{ font-size: 0.8em; color: #888; }}
+</style>
+</head>
+<body>
+<h1>Brailce Scanner Debug History</h1>
+<p class="sub">Latest 30 Scans Saved</p>
+<div class="latest-banner">
+    <h2>Pinakabagong Scan (last_scan.jpg)</h2>
+    <a href="last_scan.jpg" target="_blank"><img src="last_scan.jpg?t={now.timestamp()}" alt="Latest Scan" /></a>
+</div>
+<div class="grid">
+{''.join(cards_html)}
+</div>
+</body>
+</html>"""
+            with open(os.path.join(debug_dir, "index.html"), "w", encoding="utf-8") as f:
+                f.write(html_content)
+        except Exception as exc:
+            logger.debug("_save_scan_history error: %s", exc)
+
     def process_image(
         self,
         image: np.ndarray,
@@ -1143,11 +1279,7 @@ class OBREngine:
 
         quality_ok, reason, lap_var = self.check_image_quality(image)
         if not quality_ok:
-            try:
-                os.makedirs("debug_scan", exist_ok=True)
-                cv2.imwrite("debug_scan/last_scan.jpg", image)
-            except Exception:
-                pass
+            self._save_scan_history(image, False, "", reason)
             logger.info("Scanner result: quality gate failed reason=%s lap_var=%.2f", reason, lap_var)
             return {"readable": False, "reason": reason, "text": "", "cells": [], "lap_var": lap_var}
 
@@ -1224,15 +1356,7 @@ class OBREngine:
         if len(dots) < 2 or (0 < dot_diam < 3.8):
             res_reason = "too_small" if (0 < dot_diam < 3.8) else "no_braille"
             cv2.putText(dbg_img, f"UNREADABLE: {res_reason}", (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 255), 2)
-            dbg_paths = ["debug_scan/last_scan.jpg"]
-            if os.name != "nt":
-                dbg_paths.append("/tmp/last_scan_debug.jpg")
-            for dbg_path in dbg_paths:
-                try:
-                    os.makedirs(os.path.dirname(os.path.abspath(dbg_path)), exist_ok=True)
-                    cv2.imwrite(dbg_path, dbg_img)
-                except Exception:
-                    pass
+            self._save_scan_history(dbg_img, False, "", res_reason)
             logger.info("Scanner result: dot_count=%d dot_pitch=0.00 cells_found=0 readable=False reason=%s text=''", len(dots), res_reason)
             return {
                 "readable": False,
@@ -1342,16 +1466,8 @@ class OBREngine:
         header_color = (0, 255, 0) if readable else (0, 0, 255)
         cv2.putText(target_dbg_frame, header_txt, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75, header_color, 2)
 
-        # Save debug image to debug_scan/last_scan.jpg (and /tmp on Linux)
-        dbg_paths = ["debug_scan/last_scan.jpg"]
-        if os.name != "nt":
-            dbg_paths.append("/tmp/last_scan_debug.jpg")
-        for dbg_path in dbg_paths:
-            try:
-                os.makedirs(os.path.dirname(os.path.abspath(dbg_path)), exist_ok=True)
-                cv2.imwrite(dbg_path, target_dbg_frame)
-            except Exception as save_exc:
-                logger.debug("Failed saving debug image to %s: %s", dbg_path, save_exc)
+        # Save debug image to debug_scan/last_scan.jpg and timestamped history
+        self._save_scan_history(target_dbg_frame, readable, text, reason)
 
         # Shift coordinates if ROI was used
         if x0 != 0 or y0 != 0:

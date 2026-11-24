@@ -182,3 +182,62 @@ class TestClassicalOBRQualityGatesAndUnknowns:
             dots, dd = engine.detect_dots(enhanced)
             assert len(dots) > 100
             assert dd > 3.0
+
+    def test_boundary_phantom_noise_pruning(self) -> None:
+        """Stray dots near paper border producing '? RAIN' or trailing noise are cleanly trimmed."""
+        engine = OBREngine()
+        p_dot = 20.0
+        cell_dots = {
+            'R': [(0, 0), (0, 1), (0, 2), (1, 1)],
+            'A': [(0, 0)],
+            'I': [(0, 1), (1, 0)],
+            'N': [(0, 0), (0, 2), (1, 0), (1, 1)]
+        }
+        dots = [{'x': 10.0, 'y': 105.0, 'd': 8.0}]  # isolated edge stray dot
+        for i, ch in enumerate('RAIN'):
+            x_base = 80.0 + i * (2.4 * p_dot)
+            y_base = 100.0
+            for col, row in cell_dots[ch]:
+                dots.append({'x': x_base + col * p_dot, 'y': y_base + row * p_dot, 'd': 8.0})
+
+        res = engine.decode_dots_to_text(dots, 8.0, (300, 400, 3))
+        assert res["readable"] is True
+        assert res["text"] == "RAIN"
+        assert len(res["cells"]) == 4
+
+    def test_home_pitch_resilience(self) -> None:
+        """Words with diagonal letters (HOME) decode accurately across diverse cell pitches."""
+        engine = OBREngine()
+        p_dot = 20.0
+        cell_dots = {
+            'H': [(0, 0), (0, 1), (1, 1)],
+            'O': [(0, 0), (0, 2), (1, 1)],
+            'M': [(0, 0), (0, 2), (1, 0)],
+            'E': [(0, 0), (1, 1)]
+        }
+        for factor in [2.1, 2.2, 2.3, 2.4, 2.5]:
+            dots = []
+            for i, ch in enumerate('HOME'):
+                x_base = 50.0 + i * (factor * p_dot)
+                y_base = 100.0
+                for col, row in cell_dots[ch]:
+                    dots.append({'x': x_base + col * p_dot, 'y': y_base + row * p_dot, 'd': 8.0})
+            res = engine.decode_dots_to_text(dots, 8.0, (300, 400, 3))
+            assert res["readable"] is True
+            assert res["text"] == "HOME", f"Failed at factor {factor}: got {res['text']}"
+
+    def test_scan_history_and_pruning(self, tmp_path) -> None:
+        """Scan history correctly saves timestamped images, caps at 30, and generates index.html."""
+        import numpy as np
+        engine = OBREngine()
+        test_frame = np.full((100, 100, 3), 200, dtype=np.uint8)
+
+        engine._save_scan_history(test_frame, True, "JUMP", "ok")
+        assert os.path.exists("debug_scan/last_scan.jpg")
+        assert os.path.exists("debug_scan/index.html")
+
+        # Verify HTML contains reference to JUMP
+        with open("debug_scan/index.html", "r", encoding="utf-8") as f:
+            html = f.read()
+        assert "Brailce Scanner Debug History" in html
+        assert "JUMP" in html

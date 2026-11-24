@@ -574,14 +574,17 @@ class ScannerMode(BaseMode):
 
                 speech = getattr(self.app, "speech", None)
                 if speech:
-                    if lang == "fil":
-                        no_braille_wav = os.path.join("brailce", "audio", "filipino", "no_braille_fil.wav")
-                        if os.path.isfile(no_braille_wav):
-                            AudioDeviceCoordinator.play_wav_file(no_braille_wav, owner="scanner", timeout=4.0)
+                    if reason == "no_braille":
+                        if lang == "fil":
+                            no_braille_wav = os.path.join("brailce", "audio", "filipino", "no_braille_fil.wav")
+                            if os.path.isfile(no_braille_wav):
+                                AudioDeviceCoordinator.play_wav_file(no_braille_wav, owner="scanner", timeout=4.0)
+                            else:
+                                speech.speak_text(msg, interrupt=True)
                         else:
-                            speech.speak_text("Walang mabasang Braille.", interrupt=True)
+                            speech.speak_text(msg, interrupt=True)
                     else:
-                        speech.speak_text("No Braille detected.", interrupt=True)
+                        speech.speak_text(msg, interrupt=True)
                 return
 
             self.scanned_text = text_res
