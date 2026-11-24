@@ -38,7 +38,7 @@ UNKNOWN_CELL_CHAR = "?"
 
 # Center ROI Constants (slim horizontal box for single-line Braille)
 ROI_W_FRAC: float = 0.78
-ROI_H_FRAC: float = 0.22
+ROI_H_FRAC: float = 0.30
 SHOW_ROI: bool = True
 
 
@@ -548,6 +548,10 @@ class OBREngine:
             ink_dark = ((bg - gray_f) > 15.0).astype(np.uint8) * 255
             num_ink, labels_ink, stats_ink, _ = cv2.connectedComponentsWithStats(ink_dark, connectivity=8)
             ink_mask = np.zeros_like(gray, dtype=np.uint8)
+            res_scale = max(0.45, min(1.5, max(w, h) / 960.0))
+            max_dim_limit = 22.0 * res_scale
+            elong_dim_limit = 12.0 * res_scale
+            area_limit = 250.0 * (res_scale ** 2)
             for i in range(1, num_ink):
                 area_i = float(stats_ink[i, cv2.CC_STAT_AREA])
                 bw_i = float(stats_ink[i, cv2.CC_STAT_WIDTH])
@@ -564,9 +568,9 @@ class OBREngine:
                 dark_depth = float(-np.min(patch_diff))
                 touches_edge = (y0_i <= 3) or (y0_i + int(bh_i) >= h - 3)
                 if (
-                    max_dim > 22.0
-                    or (aspect_i > 2.1 and max_dim > 12.0)
-                    or area_i > 250.0
+                    max_dim > max_dim_limit
+                    or (aspect_i > 2.1 and max_dim > elong_dim_limit)
+                    or area_i > area_limit
                     or (touches_edge and dark_depth > 18.0 and bright_peak < 10.0)
                     or (dark_depth > 22.0 and bright_peak < max(6.0, dark_depth * 0.25))
                 ):
@@ -1535,7 +1539,7 @@ p.sub {{ text-align: center; color: #aaa; margin-bottom: 24px; }}
                 "lap_var": lap_var,
             }
 
-        res = self.decode_dots_to_text(dots, dot_diam, crop.shape, single_line=False)
+        res = self.decode_dots_to_text(dots, dot_diam, crop.shape, single_line=(not use_full))
         res["lap_var"] = lap_var
         res["dots"] = dots
 
