@@ -205,6 +205,39 @@ class TestClassicalOBRQualityGatesAndUnknowns:
         assert res["text"] == "RAIN"
         assert len(res["cells"]) == 4
 
+    def test_multiline_noise_and_flashcard_pruning(self) -> None:
+        """Background noise lines (punctuation, unknowns, stray wire artifacts) are pruned from real Braille words."""
+        engine = OBREngine()
+        p_dot = 20.0
+        cell_dots = {
+            'S': [(0, 1), (0, 2), (1, 0)],
+            'H': [(0, 0), (0, 1), (1, 1)],
+            'I': [(0, 1), (1, 0)],
+            'P': [(0, 0), (0, 1), (0, 2), (1, 0)]
+        }
+        dots = []
+        # Main Braille word line at y=200
+        for i, ch in enumerate('SHIP'):
+            x_base = 80.0 + i * (2.4 * p_dot)
+            y_base = 200.0
+            for col, row in cell_dots[ch]:
+                dots.append({'x': x_base + col * p_dot, 'y': y_base + row * p_dot, 'd': 8.0})
+
+        # Stray noise lines simulating background cables/reflections
+        # Noise line 1: pure punctuation (!?,) at y=60
+        dots.append({'x': 50.0, 'y': 60.0, 'd': 8.0})
+        dots.append({'x': 70.0, 'y': 60.0, 'd': 8.0})
+        dots.append({'x': 90.0, 'y': 60.0, 'd': 8.0})
+
+        # Noise line 2: isolated cable fragment (2 dots) at y=350
+        dots.append({'x': 100.0, 'y': 350.0, 'd': 8.0})
+        dots.append({'x': 150.0, 'y': 350.0, 'd': 8.0})
+
+        res = engine.decode_dots_to_text(dots, 8.0, (500, 500, 3))
+        assert res["readable"] is True
+        assert res["text"] == "SHIP"
+        assert len(res["cells"]) == 4
+
     def test_home_pitch_resilience(self) -> None:
         """Words with diagonal letters (HOME) decode accurately across diverse cell pitches."""
         engine = OBREngine()

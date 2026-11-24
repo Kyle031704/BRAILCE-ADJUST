@@ -758,14 +758,15 @@ class OBREngine:
                 l.sort(key=lambda d: d["rx"])
 
         cell_pitch_default = p_dot * 2.4
-        line_strings: List[str] = []
-        cell_events: List[Dict[str, Any]] = []
-        debug_boxes: List[Dict[str, Any]] = []
+        decoded_lines: List[Dict[str, Any]] = []
         word_idx = 0
 
         for line_idx, line_dots in enumerate(lines):
             if len(line_dots) < 1:
                 continue
+
+            cur_line_cells: List[Dict[str, Any]] = []
+            cur_line_boxes: List[Dict[str, Any]] = []
 
             # 2. Fit best top-row baseline y0 such that y0, y0+p_dot, y0+2*p_dot maximize dot fit
             ys = np.array([d["ry"] for d in line_dots], dtype=np.float64)
@@ -870,13 +871,13 @@ class OBREngine:
 
                 if char == "#":
                     is_number = True
-                    debug_boxes.append({"x": ux, "y": uy, "w": p_dot * 1.6, "h": p_dot * 2.6, "label": "#"})
-                    cell_events.append({"char": "#", "kind": "indicator", "dots": active_dots, "dots_str": dots_str, "word_index": word_idx, "line_index": line_idx})
+                    cur_line_boxes.append({"x": ux, "y": uy, "w": p_dot * 1.6, "h": p_dot * 2.6, "label": "#"})
+                    cur_line_cells.append({"char": "#", "kind": "indicator", "dots": active_dots, "dots_str": dots_str, "word_index": word_idx, "line_index": line_idx})
                     continue
                 if char == "^":
                     is_capital = True
-                    debug_boxes.append({"x": ux, "y": uy, "w": p_dot * 1.6, "h": p_dot * 2.6, "label": "^"})
-                    cell_events.append({"char": "^", "kind": "indicator", "dots": active_dots, "dots_str": dots_str, "word_index": word_idx, "line_index": line_idx})
+                    cur_line_boxes.append({"x": ux, "y": uy, "w": p_dot * 1.6, "h": p_dot * 2.6, "label": "^"})
+                    cur_line_cells.append({"char": "^", "kind": "indicator", "dots": active_dots, "dots_str": dots_str, "word_index": word_idx, "line_index": line_idx})
                     continue
                 if char == "" or char == " ":
                     continue
@@ -904,8 +905,8 @@ class OBREngine:
                     kind = "char"
 
                 line_str += out_c
-                debug_boxes.append({"x": ux, "y": uy, "w": p_dot * 1.6, "h": p_dot * 2.6, "label": out_c})
-                cell_events.append({
+                cur_line_boxes.append({"x": ux, "y": uy, "w": p_dot * 1.6, "h": p_dot * 2.6, "label": out_c})
+                cur_line_cells.append({
                     "char": out_c,
                     "kind": kind,
                     "capitalized": cap_flag,
@@ -914,8 +915,6 @@ class OBREngine:
                     "word_index": word_idx,
                     "line_index": line_idx,
                 })
-
-
 
             clean_l = " ".join(line_str.split()).strip()
             # Boundary phantom cell pruning (e.g. stray margin dot producing '? RAIN' or 'HOME ?'):
@@ -926,28 +925,61 @@ class OBREngine:
                     stray_char = words_in_line[0]
                     words_in_line = words_in_line[1:]
                     clean_l = " ".join(words_in_line)
-                    for idx, ev in enumerate(cell_events):
-                        if ev.get("line_index") == line_idx and ev.get("char") == stray_char:
-                            cell_events.pop(idx)
-                            if idx < len(debug_boxes):
-                                debug_boxes.pop(idx)
+                    for idx, ev in enumerate(cur_line_cells):
+                        if ev.get("char") == stray_char:
+                            cur_line_cells.pop(idx)
+                            if idx < len(cur_line_boxes):
+                                cur_line_boxes.pop(idx)
                             break
                 # Check trailing word: if single-char unknown/punctuation and previous word is a multi-letter word
                 if len(words_in_line) >= 2 and words_in_line[-1] in {UNKNOWN_CELL_CHAR, "?", "'", ",", ".", "!"} and len(words_in_line[-2]) >= 2:
                     stray_char = words_in_line[-1]
                     words_in_line = words_in_line[:-1]
                     clean_l = " ".join(words_in_line)
-                    for idx in range(len(cell_events) - 1, -1, -1):
-                        ev = cell_events[idx]
-                        if ev.get("line_index") == line_idx and ev.get("char") == stray_char:
-                            cell_events.pop(idx)
-                            if idx < len(debug_boxes):
-                                debug_boxes.pop(idx)
+                    for idx in range(len(cur_line_cells) - 1, -1, -1):
+                        ev = cur_line_cells[idx]
+                        if ev.get("char") == stray_char:
+                            cur_line_cells.pop(idx)
+                            if idx < len(cur_line_boxes):
+                                cur_line_boxes.pop(idx)
                             break
 
             if clean_l:
-                line_strings.append(clean_l)
+                decoded_lines.append({
+                    "line_str": clean_l,
+                    "cells": cur_line_cells,
+                    "boxes": cur_line_boxes,
+                    "dots": line_dots,
+                })
             word_idx += 1
+
+        # Multi-line noise filtering: discard non-Braille phantom lines
+        valid_lines: List[Dict[str, Any]] = []
+        for l_rec in decoded_lines:
+            l_str = l_rec["line_str"]
+            letters = sum(1 for c in l_str if c.isalnum())
+            noise = sum(1 for c in l_str if not c.isalnum() and not c.isspace())
+            # Rule 1: Must contain at least one letter or digit
+            if letters == 0:
+                continue
+            # Rule 2: Cannot be dominated by noise / unknown cells
+            if noise > letters:
+                continue
+            valid_lines.append({**l_rec, "letters": letters})
+
+        # Rule 3: Dominant Braille line selection
+        # If there is a dominant line (e.g. >= 3 letters), filter out stray 1-2 letter fragments from background noise
+        if valid_lines:
+            max_letters = max(vl["letters"] for vl in valid_lines)
+            if max_letters >= 3:
+                valid_lines = [vl for vl in valid_lines if vl["letters"] >= 3 or vl["letters"] >= (max_letters * 0.6)]
+
+        line_strings = [vl["line_str"] for vl in valid_lines]
+        cell_events = []
+        debug_boxes = []
+        for vl in valid_lines:
+            cell_events.extend(vl["cells"])
+            debug_boxes.extend(vl["boxes"])
 
         final_text = "\n".join(line_strings).strip()
         if not final_text:
