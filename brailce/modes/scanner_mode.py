@@ -225,7 +225,15 @@ class ScannerMode(BaseMode):
                 obr = self.app.obr
                 distance_state = "no_braille"
                 if hasattr(obr, "assess_braille_distance"):
-                    dist_info = obr.assess_braille_distance(frame, confidence_threshold=conf_threshold)
+                    # Evaluate strictly the center-strip ROI matching the LCD viewfinder reticle
+                    h_f, w_f = frame.shape[:2]
+                    from brailce.vision.obr_engine import ROI_W_FRAC, ROI_H_FRAC
+                    roi_w = int(w_f * ROI_W_FRAC)
+                    roi_h = int(h_f * ROI_H_FRAC)
+                    rx0 = (w_f - roi_w) // 2
+                    ry0 = (h_f - roi_h) // 2
+                    roi_frame = frame[ry0 : ry0 + roi_h, rx0 : rx0 + roi_w]
+                    dist_info = obr.assess_braille_distance(roi_frame, confidence_threshold=conf_threshold)
                     conf = dist_info.get("confidence", 0.0)
                     dot_count = dist_info.get("dot_count", 0)
                     # Must have at least 6 aligned dots inside ROI box before triggering distance guidance
@@ -519,26 +527,15 @@ class ScannerMode(BaseMode):
 
             for cand in candidates:
                 self._scanned_frame = cand
-                # 1. Try slim horizontal single-line ROI first (matches HUD reticle and excludes ink text below)
-                res_center = self.app.obr.process_image(cand, full_frame=False)
-                if (
-                    res_center.get("readable")
-                    and str(res_center.get("text", "")).strip()
-                    and UNKNOWN_CELL_CHAR not in str(res_center.get("text", ""))
-                ):
-                    best_result = res_center
-                    best_frame = cand
-                    break
-
-                # 2. Try full frame if ROI had no readable Braille
-                res = self.app.obr.process_image(cand, full_frame=True)
+                # Strict Center-Strip ROI: process strictly the single-line window matching the LCD reticle
+                res = self.app.obr.process_image(cand, full_frame=False)
                 if res.get("readable") and str(res.get("text", "")).strip():
                     best_result = res
                     best_frame = cand
                     break
 
                 if best_result is None:
-                    best_result = res_center if res_center.get("readable") else res
+                    best_result = res
                     best_frame = cand
 
             self._scanned_frame = best_frame

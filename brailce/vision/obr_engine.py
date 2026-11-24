@@ -377,16 +377,16 @@ class OBREngine:
         flat = OBREngine.remove_background_shadows(gray)
 
         # 2. Identify candidate dark ink pixels relative to local paper background
-        dark_mask = (flat < 92).astype(np.uint8) * 255
+        dark_mask = (flat < 118).astype(np.uint8) * 255
         paper_med = float(np.median(gray))
-        abs_dark = (gray < min(75.0, paper_med - 35.0)).astype(np.uint8) * 255
+        abs_dark = (gray < paper_med - 18.0).astype(np.uint8) * 255
         combined_dark = cv2.bitwise_or(dark_mask, abs_dark)
 
         if np.any(combined_dark > 0):
             num, labels, stats, _ = cv2.connectedComponentsWithStats(combined_dark, connectivity=8)
             areas = [float(stats[i, cv2.CC_STAT_AREA]) for i in range(1, num)]
-            candidate_dot_areas = [a for a in areas if 6.0 <= a <= 110.0]
-            expected_dot_area = float(np.median(candidate_dot_areas)) if candidate_dot_areas else 35.0
+            candidate_dot_areas = [a for a in areas if 6.0 <= a <= 130.0]
+            expected_dot_area = float(np.median(candidate_dot_areas)) if candidate_dot_areas else 40.0
 
             text_mask = np.zeros_like(gray, dtype=np.uint8)
             for i in range(1, num):
@@ -400,14 +400,14 @@ class OBREngine:
 
                 # Ink rejection criteria:
                 # - Connected area > 2.5 * expected dot area
-                # - Elongated stroke (aspect ratio > 2.0 and max_dim > 7)
-                # - Very large component (max_dim > 20 or area > 140)
+                # - Elongated stroke (pen stroke, line, letter stem)
+                # - Very large component (max_dim > 22 or area > 180)
                 is_ink = False
-                if a_comp > max(80.0, 2.5 * expected_dot_area):
+                if a_comp > max(160.0, 2.5 * expected_dot_area):
                     is_ink = True
-                elif aspect_ratio > 2.0 and (max_dim > 7.0 or a_comp > 20.0):
+                elif aspect_ratio > 2.0 and (max_dim > 16.0 or a_comp > 40.0):
                     is_ink = True
-                elif max_dim > 20.0 or a_comp > 140.0:
+                elif max_dim > 22.0 or a_comp > 180.0:
                     is_ink = True
 
                 if is_ink:
@@ -415,13 +415,18 @@ class OBREngine:
 
             if np.any(text_mask > 0):
                 kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-                dilated = cv2.dilate(text_mask, kernel, iterations=1)
-                bg_smooth = cv2.GaussianBlur(gray, (21, 21), 0)
-                if len(clean.shape) == 3:
-                    for c in range(3):
-                        clean[:, :, c][dilated > 0] = bg_smooth[dilated > 0]
-                else:
-                    clean[dilated > 0] = bg_smooth[dilated > 0]
+                dilated = cv2.dilate(text_mask, kernel, iterations=2)
+                try:
+                    clean = cv2.inpaint(clean, dilated, 7, cv2.INPAINT_TELEA)
+                except Exception:
+                    bg_only = gray.copy()
+                    bg_only[dilated > 0] = int(round(paper_med))
+                    bg_smooth = cv2.GaussianBlur(bg_only, (25, 25), 0)
+                    if len(clean.shape) == 3:
+                        for c in range(3):
+                            clean[:, :, c][dilated > 0] = bg_smooth[dilated > 0]
+                    else:
+                        clean[dilated > 0] = bg_smooth[dilated > 0]
 
         return clean
 
@@ -835,24 +840,49 @@ class OBREngine:
             is_number = False
             is_capital = False
 
+            def _decode_col_dots(col_dots: List[Dict[str, float]]) -> List[Tuple[Dict[str, float], int]]:
+                sorted_d = sorted(col_dots, key=lambda d: d["ry"])
+                n = len(sorted_d)
+                if n == 0:
+                    return []
+                if n >= 3:
+                    return [(sorted_d[0], 0), (sorted_d[1], 1), (sorted_d[2], 2)]
+                if n == 2:
+                    r0 = int(round((sorted_d[0]["ry"] - best_y0) / p_dot))
+                    r1 = int(round((sorted_d[1]["ry"] - best_y0) / p_dot))
+                    r0 = max(0, min(2, r0))
+                    r1 = max(0, min(2, r1))
+                    diff = sorted_d[1]["ry"] - sorted_d[0]["ry"]
+                    if diff >= 1.45 * p_dot:
+                        return [(sorted_d[0], 0), (sorted_d[1], 2)]
+                    elif r0 == r1:
+                        if r0 == 0:
+                            r1 = 1
+                        elif r0 == 2:
+                            r0 = 1
+                        else:
+                            if sorted_d[0]["ry"] - best_y0 < 0.8 * p_dot:
+                                r0, r1 = 0, 1
+                            else:
+                                r0, r1 = 1, 2
+                    return [(sorted_d[0], r0), (sorted_d[1], r1)]
+                r0 = int(round((sorted_d[0]["ry"] - best_y0) / p_dot))
+                return [(sorted_d[0], max(0, min(2, r0)))]
+
             for c_idx, cell in enumerate(cell_groups):
                 # Detect word space between cells
                 if c_idx > 0:
                     space_gap = cell["x_start"] - cell_groups[c_idx - 1]["x_end"]
-                    if space_gap >= p_cell * 1.25:
+                    if space_gap >= max(p_dot * 1.85, p_cell * 0.85):
                         line_str += " "
                         is_number = False
                         is_capital = False
                         word_idx += 1
 
                 bits = [0, 0, 0, 0, 0, 0]
-                for d in cell["col0"]:
-                    row = int(round((d["ry"] - best_y0) / p_dot))
-                    row = max(0, min(2, row))
+                for d, row in _decode_col_dots(cell["col0"]):
                     bits[0 * 3 + row] = 1
-                for d in cell["col1"]:
-                    row = int(round((d["ry"] - best_y0) / p_dot))
-                    row = max(0, min(2, row))
+                for d, row in _decode_col_dots(cell["col1"]):
                     bits[1 * 3 + row] = 1
 
                 bit_str = "".join(str(b) for b in bits)
@@ -927,10 +957,35 @@ class OBREngine:
         if not final_text:
             return {"readable": False, "reason": "no_braille", "text": "", "cells": [], "boxes": debug_boxes}
 
+        # Token filtering & edge-noise suppression:
+        tokens = [t.strip() for t in final_text.split() if t.strip()]
+        garbage_punct = {'?', '"', ',', ':', '!', ';', '.'}
+        valid_tokens = []
+        for token in tokens:
+            if any(ch in garbage_punct for ch in token):
+                continue
+            if not any(ch.isalnum() for ch in token):
+                continue
+            valid_tokens.append(token)
+
+        if not valid_tokens:
+            return {"readable": False, "reason": "no_braille", "text": "", "cells": [], "boxes": debug_boxes}
+
+        has_multi = any(len(t) >= 2 and any(c.isalnum() for c in t) for t in valid_tokens)
+        if has_multi:
+            while len(valid_tokens) > 1 and len(valid_tokens[0]) == 1:
+                valid_tokens.pop(0)
+            while len(valid_tokens) > 1 and len(valid_tokens[-1]) == 1:
+                valid_tokens.pop(-1)
+
+        cleaned_text = " ".join(valid_tokens).strip()
+        if not cleaned_text or not any(c.isalnum() for c in cleaned_text):
+            return {"readable": False, "reason": "no_braille", "text": "", "cells": [], "boxes": debug_boxes}
+
         return {
             "readable": True,
             "reason": "ok",
-            "text": final_text,
+            "text": cleaned_text,
             "cells": cell_events,
             "boxes": debug_boxes,
             "skew_deg": skew_deg,
@@ -1186,7 +1241,7 @@ class OBREngine:
         dots, dot_diam = self.detect_dots(clean_crop)
 
         # 3b. Adaptive contrast enhancement fallback for faint dots under diffuse lighting
-        if len(dots) < 8:
+        if 0 < len(dots) < 8:
             enhanced_crop = self.enhance_contrast(clean_crop)
             e_dots, e_diam = self.detect_dots(enhanced_crop)
             if len(e_dots) > len(dots):
@@ -1201,7 +1256,7 @@ class OBREngine:
             c_crop = image[c_y0 : c_y0 + c_roi_h, c_x0 : c_x0 + c_roi_w].copy()
             clean_c = self.suppress_printed_ink(c_crop)
             c_dots, c_diam = self.detect_dots(clean_c)
-            if len(c_dots) < 8:
+            if 0 < len(c_dots) < 8:
                 c_dots_e, c_diam_e = self.detect_dots(self.enhance_contrast(clean_c))
                 if len(c_dots_e) > len(c_dots):
                     c_dots, c_diam = c_dots_e, c_diam_e
@@ -1210,6 +1265,7 @@ class OBREngine:
                 clean_crop = clean_c
                 dots, dot_diam = c_dots, c_diam
                 x0, y0 = c_x0, c_y0
+                roi_w, roi_h = c_roi_w, c_roi_h
 
         # Prepare debug visual frame
         dbg_img = crop.copy()
