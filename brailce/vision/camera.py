@@ -425,12 +425,13 @@ class UsbWebcamDevice(CameraDevice):
                             pass
                     continue
 
-                # Request MJPG + 640x480 (retry default format if refused)
+                # Request MJPG + configured resolution (default 1280x720, fallback to 640x480)
                 try:
                     fourcc = cv2.VideoWriter_fourcc(*"MJPG")
                     cap.set(cv2.CAP_PROP_FOURCC, fourcc)
-                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                    w_req, h_req = self.resolution
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, w_req)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h_req)
                 except Exception:
                     pass
 

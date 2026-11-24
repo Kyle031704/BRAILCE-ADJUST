@@ -526,16 +526,21 @@ class ScannerMode(BaseMode):
             best_result = None
             best_frame = None
 
+            best_score = (-1, -1)
             for cand in candidates:
                 self._scanned_frame = cand
                 # Center-Strip ROI only: strictly scan the word inside the LCD box
                 res = self.app.obr.process_image(cand, full_frame=False, embossed_only=True)
-                if res.get("readable") and str(res.get("text", "")).strip():
-                    best_result = res
-                    best_frame = cand
-                    break
-
-                if best_result is None:
+                txt = str(res.get("text", "")).strip()
+                if res.get("readable") and txt:
+                    valid_alpha = sum(1 for c in txt if c.isalnum())
+                    q_count = txt.count("?")
+                    score = (valid_alpha - q_count * 2, len(res.get("dots", [])))
+                    if score > best_score:
+                        best_score = score
+                        best_result = res
+                        best_frame = cand
+                elif best_result is None:
                     best_result = res
                     best_frame = cand
 
