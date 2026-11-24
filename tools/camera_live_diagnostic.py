@@ -91,9 +91,12 @@ def run_single_diagnostic(cam, obr, save_path="debug_scan/live_test.jpg"):
         import shutil
         shutil.copy("debug_scan/last_scan.jpg", save_path)
         print(f"\n[SAVED] Visual proof saved to: {save_path}")
-        print("  - Green circles = detected dots")
-        print("  - Tight Red boxes = 2x3 Braille cells")
-        print("  - Yellow text = decoded Grade 1 character")
+        if readable:
+            print("  - Green circles = detected dots")
+            print("  - Tight Red boxes = 2x3 Braille cells")
+            print("  - Yellow text = decoded Grade 1 character")
+        else:
+            print(f"  - UNREADABLE: {reason} (Walang embossed Braille na natagpuan sa harap ng camera)")
 
     print("=" * 60 + "\n")
     return readable

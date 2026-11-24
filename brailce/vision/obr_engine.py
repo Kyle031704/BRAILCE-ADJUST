@@ -1286,6 +1286,12 @@ p.sub {{ text-align: center; color: #aaa; margin-bottom: 24px; }}
         # Braille presence confidence heuristic gate: reject computer screens, terminal text, and random noise
         gray_full = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
         if float(np.mean(gray_full < 90)) > 0.15 or self.braille_presence_confidence(image) < 0.20:
+            dbg_fail = image.copy()
+            if len(dbg_fail.shape) == 2:
+                dbg_fail = cv2.cvtColor(dbg_fail, cv2.COLOR_GRAY2BGR)
+            cv2.putText(dbg_fail, "UNREADABLE: no_braille", (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 255), 2)
+            self._save_scan_history(dbg_fail, False, "", "no_braille")
+            logger.info("Scanner result: no Braille detected (dark=%.2f, conf=%.2f)", float(np.mean(gray_full < 90)), self.braille_presence_confidence(image))
             return {"readable": False, "reason": "no_braille", "text": "", "cells": [], "lap_var": lap_var}
 
         h, w = image.shape[:2]
@@ -1433,20 +1439,26 @@ p.sub {{ text-align: center; color: #aaa; margin-bottom: 24px; }}
             res["reason"] = "no_braille"
             res["text"] = ""
 
-        # Draw red boxes tightly around each 2x3 Braille cell
-        for b in boxes:
-            bx = int(round(b["x"] - b["w"] / 2.0))
-            by = int(round(b["y"] - b["h"] / 2.0))
-            bw = int(round(b["w"]))
-            bh = int(round(b["h"]))
-            cv2.rectangle(dbg_img, (bx, by), (bx + bw, by + bh), (0, 0, 255), 2)
-            lbl = str(b.get("label", ""))
-            if lbl:
-                cv2.putText(dbg_img, lbl, (bx, max(14, by - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 255, 255), 2)
-
         readable = bool(res.get("readable", False))
         reason = str(res.get("reason", "no_braille" if not readable else "ok"))
         text = str(res.get("text", "")).strip()
+
+        # Draw red boxes tightly around each 2x3 Braille cell ONLY if readable
+        if readable:
+            for b in boxes:
+                bx = int(round(b["x"] - b["w"] / 2.0))
+                by = int(round(b["y"] - b["h"] / 2.0))
+                bw = int(round(b["w"]))
+                bh = int(round(b["h"]))
+                cv2.rectangle(dbg_img, (bx, by), (bx + bw, by + bh), (0, 0, 255), 2)
+                lbl = str(b.get("label", ""))
+                if lbl:
+                    cv2.putText(dbg_img, lbl, (bx, max(14, by - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 255, 255), 2)
+        else:
+            boxes = []
+            cells = []
+            res["boxes"] = []
+            res["cells"] = []
 
         # Build full debug visual frame (including ROI border if cropped)
         if x0 != 0 or y0 != 0:
