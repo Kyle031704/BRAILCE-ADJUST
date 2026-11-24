@@ -526,23 +526,27 @@ class ScannerMode(BaseMode):
             best_result = None
             best_frame = None
 
-            best_score = (-1, -1)
             for cand in candidates:
                 self._scanned_frame = cand
-                # Center-Strip ROI only: strictly scan the word inside the LCD box
-                res = self.app.obr.process_image(cand, full_frame=False, embossed_only=True)
-                txt = str(res.get("text", "")).strip()
-                if res.get("readable") and txt:
-                    valid_alpha = sum(1 for c in txt if c.isalnum())
-                    q_count = txt.count("?")
-                    score = (valid_alpha - q_count * 2, len(res.get("dots", [])))
-                    if score > best_score:
-                        best_score = score
-                        best_result = res
-                        best_frame = cand
-                elif best_result is None:
+                # Center-Strip ROI: process ROI window matching the LCD reticle while supporting multi-line clustering
+                res = self.app.obr.process_image(cand, full_frame=False)
+                if res.get("readable") and str(res.get("text", "")).strip():
                     best_result = res
                     best_frame = cand
+                    break
+
+                if best_result is None:
+                    best_result = res
+                    best_frame = cand
+
+            # Full-frame fallback if center-strip ROI did not yield readable text (e.g. card slightly off-center)
+            if not (best_result and best_result.get("readable") and str(best_result.get("text", "")).strip()):
+                for cand in candidates:
+                    res_full = self.app.obr.process_image(cand, full_frame=True)
+                    if res_full.get("readable") and str(res_full.get("text", "")).strip():
+                        best_result = res_full
+                        best_frame = cand
+                        break
 
             self._scanned_frame = best_frame
             result = best_result or {"readable": False, "reason": "no_braille"}
