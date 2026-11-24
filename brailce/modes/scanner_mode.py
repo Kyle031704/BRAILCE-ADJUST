@@ -227,9 +227,15 @@ class ScannerMode(BaseMode):
                 if hasattr(obr, "assess_braille_distance"):
                     dist_info = obr.assess_braille_distance(frame, confidence_threshold=conf_threshold)
                     conf = dist_info.get("confidence", 0.0)
-                    detected = conf >= conf_threshold
-                    distance_state = dist_info.get("state", "no_braille") if detected else "no_braille"
-                    logger.debug("Braille distance assessment: %s conf=%.2f", dist_info, conf)
+                    dot_count = dist_info.get("dot_count", 0)
+                    # Must have at least 6 aligned dots inside ROI box before triggering distance guidance
+                    if dot_count >= 6 and conf >= conf_threshold:
+                        detected = True
+                        distance_state = dist_info.get("state", "no_braille")
+                    else:
+                        distance_state = "no_braille"
+                        detected = False
+                    logger.debug("Braille distance assessment: %s conf=%.2f dots=%d", dist_info, conf, dot_count)
                 elif hasattr(obr, "braille_presence_confidence"):
                     conf = obr.braille_presence_confidence(frame)
                     detected = conf >= conf_threshold

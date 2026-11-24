@@ -936,12 +936,12 @@ class FilipinoEngine:
             return False
 
         framerate = TARGET_SAMPLE_RATE
-        # Natural inter-word spacing: smooth 10ms juncture between words so speech flows naturally without abrupt pauses
-        word_pause_ms = min(15, max(5, getattr(self, "word_gap_ms", 10)))
+        # Natural inter-word spacing (~35-50ms juncture) so speech flows smoothly without choppy cuts
+        word_pause_ms = min(50, max(35, getattr(self, "word_gap_ms", 40)))
         gap_samples = int(framerate * (word_pause_ms / 1000.0))
         gap_word = b"\x00\x00" * gap_samples
-        gap_comma = b"\x00\x00" * int(framerate * (max(100, min(160, getattr(self, "comma_pause_ms", 140))) / 1000.0))
-        gap_period = b"\x00\x00" * int(framerate * (max(180, min(300, getattr(self, "sentence_pause_ms", 260))) / 1000.0))
+        gap_comma = b"\x00\x00" * int(framerate * (getattr(self, "comma_pause_ms", 180) / 1000.0))
+        gap_period = b"\x00\x00" * int(framerate * (getattr(self, "sentence_pause_ms", 300) / 1000.0))
         gap_semicolon = gap_comma
 
         combined_pcm = bytearray()
@@ -969,15 +969,15 @@ class FilipinoEngine:
                         sil_thresh = max(180, int(peak_val * 0.035))
                         nz = np.where(np.abs(arr) > sil_thresh)[0]
                         if nz.size > 0:
-                            lead_pad = int(framerate * 0.004)
+                            lead_pad = int(framerate * 0.012)
                             is_internal = (j < len(words) - 1)
-                            tail_pad_ms = 0.006 if is_internal else 0.015
+                            tail_pad_ms = 0.025 if is_internal else 0.035
                             tail_pad = int(framerate * tail_pad_ms)
                             start_idx = max(0, nz[0] - lead_pad)
                             end_idx = min(len(arr), nz[-1] + 1 + tail_pad)
                             trimmed = arr[start_idx:end_idx].copy()
-                            # 5ms cosine fade at edges to prevent clicks without cutting phonemes
-                            mf_len = min(int(framerate * 0.005), len(trimmed) // 4)
+                            # 6-8ms smooth cosine fade at edges to prevent clicks without cutting phonemes
+                            mf_len = min(int(framerate * 0.007), len(trimmed) // 4)
                             if mf_len > 1:
                                 mf_in = 0.5 * (1.0 - np.cos(np.linspace(0, np.pi, mf_len)))
                                 mf_out = 0.5 * (1.0 + np.cos(np.linspace(0, np.pi, mf_len)))

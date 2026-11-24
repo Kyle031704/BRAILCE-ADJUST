@@ -332,7 +332,7 @@ class OBREngine:
                 line_strings.append(clean_l)
             word_idx += 1
 
-        final_text = "\n".join(line_strings).strip()
+        final_text = " ".join(line_strings).strip().replace("\n", " ")
         if not final_text:
             return {"readable": False, "reason": "no_braille", "text": "", "cells": []}
 
@@ -878,7 +878,7 @@ class OBREngine:
                 line_strings.append(clean_l)
             word_idx += 1
 
-        final_text = "\n".join(line_strings).strip()
+        final_text = " ".join(line_strings).strip().replace("\n", " ")
         if not final_text:
             return {"readable": False, "reason": "no_braille", "text": "", "cells": [], "boxes": debug_boxes}
 
@@ -939,7 +939,7 @@ class OBREngine:
                 if len(dots_e) > len(dots) and len(dots_e) <= 300 and diam_e >= 3.5:
                     dots, dot_diam = dots_e, diam_e
             n = len(dots)
-            if n < 4 or n > 350:
+            if n < 6 or n > 350:
                 return 0.0
 
             # Gate 3: dot coverage fraction — noise/static fills >10% of frame area with tiny blobs;
@@ -1060,11 +1060,11 @@ class OBREngine:
             small = image
 
         dots, dot_diam = self.detect_dots(small)
-        if len(dots) < 4:
+        if len(dots) < 6:
             dots_e, diam_e = self.detect_dots(self.enhance_contrast(small))
             if len(dots_e) > len(dots) and len(dots_e) <= 300 and diam_e >= 3.5:
                 dots, dot_diam = dots_e, diam_e
-        if len(dots) < 4 or len(dots) > 350:
+        if len(dots) < 6 or len(dots) > 350:
             return {"state": "no_braille", "confidence": conf, "dot_diameter": 0.0, "dot_pitch": 0.0, "dot_count": len(dots)}
 
         skew_deg, p_dot = self._estimate_skew_and_pitch(dots, dot_diam)
@@ -1223,10 +1223,20 @@ class OBREngine:
         unknown_count = sum(1 for c in cells if c.get("char") == UNKNOWN_CELL_CHAR)
         unknown_ratio = (unknown_count / len(cells)) if cells else 0.0
 
+        # Ensure decoded text has strictly no \n (Single-Line mode only)
+        res["text"] = str(res.get("text", "")).replace("\n", " ").strip()
+
+        # Reject garbage: if >25% of decoded text is '?', ',', ''', ';', or if no valid letters/digits exist
+        text_chars = [ch for ch in str(res.get("text", "")) if not ch.isspace()]
+        garbage_chars = {"?", ",", "'", ";"}
+        garbage_count = sum(1 for ch in text_chars if ch in garbage_chars)
+        garbage_ratio = (garbage_count / len(text_chars)) if text_chars else 1.0
+        has_valid_letter = any(ch.isalnum() for ch in text_chars)
+
         conf = self.braille_presence_confidence(clean_crop)
         res["confidence"] = conf
 
-        # Reject if no characters decoded or high unknown ratio (>30% unknown)
+        # Reject if no characters decoded or high unknown ratio (>25% unknown)
         if not str(res.get("text", "")).strip():
             res["readable"] = False
             res["reason"] = "no_braille"
@@ -1235,7 +1245,11 @@ class OBREngine:
             res["readable"] = False
             res["reason"] = "no_braille"
             res["text"] = ""
-        elif unknown_ratio > 0.30:
+        elif garbage_ratio > 0.25 or not has_valid_letter:
+            res["readable"] = False
+            res["reason"] = "no_braille"
+            res["text"] = ""
+        elif unknown_ratio > 0.25:
             res["readable"] = False
             res["reason"] = "no_braille"
             res["text"] = ""

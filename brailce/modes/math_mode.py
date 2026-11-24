@@ -49,6 +49,66 @@ BRAILLE_LETTER_TO_NUMBER = {
 MATH_VALID_CHARS = set("0123456789+-*/.=#")
 
 
+def format_filipino_explanation(expr: str, solution: Any) -> Tuple[str, str]:
+    """
+    Format pedagogical Grade 1 Filipino math explanations:
+    - Addition: "Ang sagot sa {a} dagdagan ng {b} ay {ans}. Pinagsama natin ang {a} at {b} kaya nakuha ang {ans}."
+    - Subtraction: "Ang sagot sa {a} bawasan ng {b} ay {ans}. Binawas natin ang {b} mula sa {a} kaya natira ang {ans}."
+    - Multiplication: "Ang sagot sa {a} ulit ng {b} ay {ans}. Ibig sabihin, pinarami natin ang {a} nang {b} beses, o {b} na pangkat ng {a}, kaya naging {ans}."
+    - Division: "Ang sagot sa {a} hatiin sa {b} ay {ans}. Ibig sabihin, hinati natin nang pantay ang {a} sa {b} na bahagi, kaya bawat bahagi ay may {ans}."
+      (with remainder: "... kaya bawat bahagi ay may {ans} at may natirang {r}.")
+    """
+    import re
+    cleaned = expr.strip()
+    m = re.match(r"^(\d+(?:\.\d+)?)\s*([\+\-\*\/×÷])\s*(\d+(?:\.\d+)?)$", cleaned)
+    if not m or not solution.is_valid:
+        return solution.explanation, solution.short_step
+
+    a_raw, op, b_raw = m.groups()
+    try:
+        a_val = int(a_raw) if float(a_raw).is_integer() else float(a_raw)
+        b_val = int(b_raw) if float(b_raw).is_integer() else float(b_raw)
+    except Exception:
+        return solution.explanation, solution.short_step
+
+    ans_str = solution.result_str
+
+    if op == "+":
+        exp = f"Ang sagot sa {a_val} dagdagan ng {b_val} ay {ans_str}. Pinagsama natin ang {a_val} at {b_val} kaya nakuha ang {ans_str}."
+        short = f"{a_val} + {b_val} = {ans_str}"
+        return exp, short
+
+    elif op in ("-", "–"):
+        exp = f"Ang sagot sa {a_val} bawasan ng {b_val} ay {ans_str}. Binawas natin ang {b_val} mula sa {a_val} kaya natira ang {ans_str}."
+        short = f"{a_val} - {b_val} = {ans_str}"
+        return exp, short
+
+    elif op in ("*", "×"):
+        exp = f"Ang sagot sa {a_val} ulit ng {b_val} ay {ans_str}. Ibig sabihin, pinarami natin ang {a_val} nang {b_val} beses, o {b_val} na pangkat ng {a_val}, kaya naging {ans_str}."
+        short = f"{a_val} x {b_val} = {ans_str}"
+        return exp, short
+
+    elif op in ("/", "÷"):
+        if b_val == 0:
+            return solution.explanation, solution.short_step
+        if isinstance(a_val, int) and isinstance(b_val, int):
+            quot = a_val // b_val
+            rem = a_val % b_val
+            if rem == 0:
+                exp = f"Ang sagot sa {a_val} hatiin sa {b_val} ay {quot}. Ibig sabihin, hinati natin nang pantay ang {a_val} sa {b_val} na bahagi, kaya bawat bahagi ay may {quot}."
+                short = f"{a_val} ÷ {b_val} = {quot}"
+            else:
+                exp = f"Ang sagot sa {a_val} hatiin sa {b_val} ay {quot}. Ibig sabihin, hinati natin nang pantay ang {a_val} sa {b_val} na bahagi, kaya bawat bahagi ay may {quot} at may natirang {rem}."
+                short = f"{quot} R{rem}"
+            return exp, short
+        else:
+            exp = f"Ang sagot sa {a_val} hatiin sa {b_val} ay {ans_str}. Ibig sabihin, hinati natin nang pantay ang {a_val} sa {b_val} na bahagi, kaya bawat bahagi ay may {ans_str}."
+            short = f"{a_val} ÷ {b_val} = {ans_str}"
+            return exp, short
+
+    return solution.explanation, solution.short_step
+
+
 class MathMode(BaseMode):
     """
     Dedicated Math Mode for Grade 1 DepEd arithmetic instruction.
@@ -204,16 +264,21 @@ class MathMode(BaseMode):
         solution = SafeArithmetic.solve(expr, language=lang)
 
         if solution.is_valid:
+            explanation = solution.explanation
+            short_step = solution.short_step
+            if lang == "fil":
+                explanation, short_step = format_filipino_explanation(expr, solution)
+
             self.state.math_last_result = solution.result_str
-            self.state.math_last_explanation = solution.explanation
+            self.state.math_last_explanation = explanation
 
             # Display solution card in appropriate language
             if self.app.display:
                 self.app.display.show_math_result(
                     equation=solution.expression,
                     result=solution.result_str,
-                    explanation=solution.explanation,
-                    short_step=solution.short_step,
+                    explanation=explanation,
+                    short_step=short_step,
                     language=lang,
                 )
                 if self.app.encoder and solution.result_str:
@@ -226,7 +291,7 @@ class MathMode(BaseMode):
             # Speak the full explanation through the unified SpeechService (same text as LCD)
             if self.app.speech:
                 if lang == "fil":
-                    self.app.speech.speak_response_text(solution.explanation, interrupt=False, lang="fil")
+                    self.app.speech.speak_response_text(explanation, interrupt=False, lang="fil")
                 else:
                     self.app.speech.speak(solution.explanation)
 
