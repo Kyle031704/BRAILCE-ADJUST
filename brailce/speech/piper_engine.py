@@ -54,7 +54,7 @@ _piper_missing_warned = False
 # rather than Option 2 ([[ phonemes ]] overrides) because it generalizes to arbitrary vocabulary
 # without Piper build-flag dependencies while keeping "is" stressed and /w/, /wh/ onsets intact.
 # length_scale 1.14 provides a calm, clear, pedagogical explanation pace without rushed delivery.
-PIPER_LENGTH_SCALE = "1.14"
+PIPER_LENGTH_SCALE = "1.05"
 PIPER_NOISE_SCALE = "0.5"
 PIPER_NOISE_W = "0.6"
 

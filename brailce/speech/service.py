@@ -236,7 +236,13 @@ class SpeechService(SpeechEngine):
 
         if self._language == "fil" and self._filipino_letter_voice == "filipino":
             self._record_utterance("character", character, {"character": character, "lang": "fil"})
-            self.filipino_engine.enqueue_character(character, use_filipino_voice=True)
+            kwargs = {"use_filipino_voice": True}
+            style_val = getattr(self, "filipino_letter_style", None)
+            if hasattr(self, "_filipino_letter_style_explicit") and self._filipino_letter_style_explicit:
+                kwargs["style"] = style_val
+            elif style_val and style_val != "english_names":
+                kwargs["style"] = style_val
+            self.filipino_engine.enqueue_character(character, **kwargs)
             return
 
         normalized = normalize_for_piper(character, is_character=True)

@@ -244,9 +244,6 @@ class AIAssistantMode(BaseMode):
         if self._cancel_event.is_set():
             return
 
-        if self.app.speech:
-            self.app.speech.speak_text(get_string("AI_THINKING", lang), interrupt=False)
-
         # Check for pre-cached offline Filipino AI responses first
         if lang == "fil":
             clean_q = re.sub(r"[^a-zA-Z0-9\s]", "", query.replace("-", " ")).strip().lower()

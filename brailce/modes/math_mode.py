@@ -266,8 +266,6 @@ class MathMode(BaseMode):
         if solution.is_valid:
             explanation = solution.explanation
             short_step = solution.short_step
-            if lang == "fil":
-                explanation, short_step = format_filipino_explanation(expr, solution)
 
             self.state.math_last_result = solution.result_str
             self.state.math_last_explanation = explanation
@@ -290,10 +288,7 @@ class MathMode(BaseMode):
 
             # Speak the full explanation through the unified SpeechService (same text as LCD)
             if self.app.speech:
-                if lang == "fil":
-                    self.app.speech.speak_response_text(explanation, interrupt=False, lang="fil")
-                else:
-                    self.app.speech.speak(solution.explanation)
+                self.app.speech.speak(explanation)
 
             # Clear buffer so student can type the next problem immediately
             self.state.clear_math_buffer()

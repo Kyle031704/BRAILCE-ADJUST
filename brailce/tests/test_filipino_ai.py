@@ -155,10 +155,6 @@ class TestFilipinoAIAssistant:
         mode = AIAssistantMode(app)
         mode._process_query("Ano ang kabisera ng Pilipinas?")
 
-        # First speech call was Filipino thinking prompt from i18n table
-        first_spoken = app.speech.speak_text.call_args_list[0][0][0]
-        assert first_spoken == get_string("AI_THINKING", "fil")
-
         # Final answer on LCD and spoken text are identical
         lcd_resp = app.display.show_ai_response.call_args[0][0]
         if app.speech.speak_response_text.called:

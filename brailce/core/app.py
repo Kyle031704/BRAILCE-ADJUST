@@ -192,7 +192,15 @@ class BrailceApp:
         elif vision_driver == "picamera":
             self.camera = PiCameraDevice()
         else:  # "usb" or "auto"
-            usb_cam = UsbWebcamDevice(device=usb_device, autofocus=autofocus, focus_value=focus_value)
+            cam_res = self.config.get("vision", "resolution", default=(1280, 720))
+            still_res = self.config.get("vision", "still_resolution", default=(1920, 1080))
+            usb_cam = UsbWebcamDevice(
+                device=usb_device,
+                resolution=tuple(cam_res) if isinstance(cam_res, (list, tuple)) else (1280, 720),
+                still_resolution=tuple(still_res) if isinstance(still_res, (list, tuple)) else (1920, 1080),
+                autofocus=autofocus,
+                focus_value=focus_value,
+            )
             if usb_cam.is_available():
                 self.camera = usb_cam
                 logger.info("Using connected USB webcam.")

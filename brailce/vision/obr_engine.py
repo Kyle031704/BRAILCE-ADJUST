@@ -367,9 +367,16 @@ class OBREngine:
         2. Identifies dark connected components that are significantly larger or more
            elongated than normal Braille dots (area > 2.5x expected dot area or aspect > 2.0).
         3. Dilates ink mask slightly and fills with local paper background.
+        Note: When paper has embossed characteristics (or dot_type is embossed), printed ink
+        suppression is bypassed so embossed shadow/highlight crescents are never erased.
         """
         if image is None or cv2 is None or image.size == 0:
             return image
+
+        # Bypass for embossed paper to preserve embossed dot shadows
+        if getattr(image, "_is_embossed", False) or os.environ.get("BRAILCE_DISABLE_INK_SUPPRESSION", "1") == "1":
+            return image
+
         clean = image.copy()
         gray = cv2.cvtColor(clean, cv2.COLOR_BGR2GRAY) if len(clean.shape) == 3 else clean.copy()
 
@@ -479,11 +486,11 @@ class OBREngine:
             return False, "no_braille", 0.0
 
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
-        if float(np.percentile(gray, 90)) <= 35.0 or float(np.std(gray)) <= 0.4:
+        if float(np.percentile(gray, 90)) <= 55.0 or float(np.std(gray)) <= 3.5:
             return False, "no_braille", 0.0
 
         lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-        if lap_var < 0.5:
+        if lap_var < 4.0:
             return False, "blurry", lap_var
 
         return True, "ok", lap_var
@@ -521,16 +528,11 @@ class OBREngine:
         dog2_l = np.clip(g2 - g3, 0.0, 255.0)
         light_resp = np.maximum(np.maximum(dog0_l, dog1_l), dog2_l)
 
-        # Quick exit for flat blank paper with no local contrast features
-        max_resp = max(float(dark_resp.max()), float(light_resp.max())) if dark_resp.size > 0 else 0.0
-        if max_resp < 2.5:
-            return [], 0.0
-
         # Robust thresholding: Braille dots typically occupy < 2% of the page
         p98_d = float(np.percentile(dark_resp, 98.0))
         p98_l = float(np.percentile(light_resp, 98.0))
-        thresh_d = max(2.5, p98_d * 0.30)
-        thresh_l = max(2.5, p98_l * 0.30)
+        thresh_d = max(4.0, p98_d * 0.42)
+        thresh_l = max(4.0, p98_l * 0.42)
 
         mask_d = (dark_resp >= thresh_d).astype(np.uint8)
         mask_l = (light_resp >= thresh_l).astype(np.uint8)
@@ -538,20 +540,16 @@ class OBREngine:
         # Dark blobs (shadows / ink dots)
         num_d, _, stats_d, cents_d = cv2.connectedComponentsWithStats(mask_d, connectivity=8)
         dark_blobs = []
-        max_dim = max(45.0, min(w, h) * 0.35)
         for lbl in range(1, num_d):
             area = float(stats_d[lbl, cv2.CC_STAT_AREA])
             bw = float(stats_d[lbl, cv2.CC_STAT_WIDTH])
             bh = float(stats_d[lbl, cv2.CC_STAT_HEIGHT])
-            if area < 3.0 or bw < 2.0 or bh < 2.0 or bw > max_dim or bh > max_dim:
+            if area < 3.0 or bw < 2.0 or bh < 2.0 or bw > (w * 0.12) or bh > (h * 0.12):
                 continue
             aspect = min(bw, bh) / max(1e-6, max(bw, bh))
             if aspect < 0.32:
                 continue
             cx, cy = float(cents_d[lbl][0]), float(cents_d[lbl][1])
-            # Reject border cutoff artifacts
-            if cx < 3.5 or cx > (w - 4.5) or cy < 3.5 or cy > (h - 4.5):
-                continue
             diam = math.sqrt(4.0 * area / math.pi)
             score = float(dark_resp[int(cy), int(cx)]) if 0 <= int(cy) < h and 0 <= int(cx) < w else 1.0
             dark_blobs.append({"x": cx, "y": cy, "d": diam, "score": score, "area": area})
@@ -563,15 +561,12 @@ class OBREngine:
             area = float(stats_l[lbl, cv2.CC_STAT_AREA])
             bw = float(stats_l[lbl, cv2.CC_STAT_WIDTH])
             bh = float(stats_l[lbl, cv2.CC_STAT_HEIGHT])
-            if area < 3.0 or bw < 2.0 or bh < 2.0 or bw > max_dim or bh > max_dim:
+            if area < 3.0 or bw < 2.0 or bh < 2.0 or bw > (w * 0.12) or bh > (h * 0.12):
                 continue
             aspect = min(bw, bh) / max(1e-6, max(bw, bh))
             if aspect < 0.32:
                 continue
             cx, cy = float(cents_l[lbl][0]), float(cents_l[lbl][1])
-            # Reject border cutoff artifacts
-            if cx < 3.5 or cx > (w - 4.5) or cy < 3.5 or cy > (h - 4.5):
-                continue
             diam = math.sqrt(4.0 * area / math.pi)
             score = float(light_resp[int(cy), int(cx)]) if 0 <= int(cy) < h and 0 <= int(cx) < w else 1.0
             light_blobs.append({"x": cx, "y": cy, "d": diam, "score": score, "area": area})
@@ -579,20 +574,20 @@ class OBREngine:
         if not dark_blobs:
             return [], 0.0
 
-        # Filter out fringe artifacts (< 30% of median) and giant merged blobs (> 220% of median)
+        # Filter out fringe artifacts / anti-aliasing edge crescents (< 30% of median dot area)
         if len(dark_blobs) >= 4:
             med_a_d = float(np.median([b["area"] for b in dark_blobs]))
-            dark_blobs = [b for b in dark_blobs if (0.30 * med_a_d) <= b["area"] <= (2.40 * med_a_d)]
+            dark_blobs = [b for b in dark_blobs if b["area"] >= (0.30 * med_a_d)]
 
         if len(light_blobs) >= 4:
             med_a_l = float(np.median([b["area"] for b in light_blobs]))
-            light_blobs = [b for b in light_blobs if (0.30 * med_a_l) <= b["area"] <= (2.00 * med_a_l)]
+            light_blobs = [b for b in light_blobs if b["area"] >= (0.30 * med_a_l)]
 
         if not dark_blobs:
             return [], 0.0
 
         est_d = float(np.median([b["d"] for b in dark_blobs]))
-        max_pair_dist = max(7.0, est_d * 1.8)
+        max_pair_dist = max(4.0, est_d * 1.15)
 
         # Match paired shadow and highlight for embossed Braille
         paired_dots: List[Dict[str, float]] = []
@@ -608,10 +603,10 @@ class OBREngine:
                     best_dist = dist
                     best_l = l_idx
 
-            if best_l is not None and best_dist >= (est_d * 0.20):
+            if best_l is not None and best_dist >= (est_d * 0.25):
                 l_match = light_blobs[best_l]
                 diam_ratio = max(d_blob["d"], l_match["d"]) / max(1e-3, min(d_blob["d"], l_match["d"]))
-                if diam_ratio <= 1.8:
+                if diam_ratio <= 2.2:
                     used_l.add(best_l)
                     # Center of embossed dot is midpoint between shadow and highlight
                     cx = (d_blob["x"] + l_match["x"]) / 2.0
@@ -624,11 +619,10 @@ class OBREngine:
                 # Solid ink dot or top-lit spot
                 paired_dots.append({"x": d_blob["x"], "y": d_blob["y"], "d": d_blob["d"], "score": d_blob["score"]})
 
-        # Non-maximum suppression / deduplicate any duplicate crescent fragments closer than suppress_r
-        # Ensures that highlight and shadow crescents from a single embossed dot are never split into 2 dots
+        # Non-maximum suppression / deduplicate any dots closer than 0.52 * est_d
         paired_dots.sort(key=lambda d: d["score"], reverse=True)
         final_dots: List[Dict[str, float]] = []
-        suppress_r = max(6.0, min(13.0, est_d * 1.35))
+        suppress_r = max(3.0, est_d * 0.52)
         for cand in paired_dots:
             if any(math.hypot(cand["x"] - ex["x"], cand["y"] - ex["y"]) <= suppress_r for ex in final_dots):
                 continue
@@ -658,13 +652,7 @@ class OBREngine:
             if len(d):
                 nn_dists.append(float(np.min(d)))
 
-        if nn_dists:
-            nns = np.array(sorted(nn_dists))
-            # Dynamic scale-invariant dot pitch from 25th-40th percentile of valid nearest-neighbor distances
-            p_dot = float(np.percentile(nns, 35))
-            p_dot = max(8.0, min(120.0, p_dot))
-        else:
-            p_dot = max(8.0, dot_diam * 2.5)
+        p_dot = float(np.median(nn_dists)) if nn_dists else max(12.0, dot_diam * 2.5)
 
         # 2. Skew estimation from orthogonal neighbor vectors around 1.0 * p_dot
         angles_deg: List[float] = []
@@ -779,119 +767,71 @@ class OBREngine:
                     else:
                         sub_cols.append([d])
 
-            p_cell = p_dot * 2.45
-            if len(sub_cols) >= 2:
-                # Estimate p_cell dynamically from neighbor column gaps
-                diffs = [
-                    float(np.mean([d["rx"] for d in sub_cols[j + 1]]))
-                    - float(np.mean([d["rx"] for d in sub_cols[j]]))
-                    for j in range(len(sub_cols) - 1)
-                ]
-                cands = [df / k for df in diffs for k in range(1, 15) if 1.9 * p_dot <= (df / k) <= 3.2 * p_dot]
+            col_xs = [float(np.mean([d["rx"] for d in sc])) for sc in sub_cols]
+
+            # Find paired columns (dx in [0.82 * p_dot, 1.18 * p_dot]) to anchor cell grid.
+            # Intra-cell column gap is strictly 1.0 * p_dot, whereas inter-cell gap is >= 1.4 * p_dot.
+            pairs: List[Tuple[float, float]] = []
+            i = 0
+            while i < len(col_xs) - 1:
+                dx = col_xs[i + 1] - col_xs[i]
+                if 0.82 * p_dot <= dx <= 1.18 * p_dot:
+                    pairs.append((col_xs[i], col_xs[i + 1]))
+                    i += 2
+                else:
+                    i += 1
+
+            p_cell = p_dot * 2.4
+            if len(pairs) >= 2:
+                diffs = [pairs[j + 1][0] - pairs[j][0] for j in range(len(pairs) - 1)]
+                cands = []
+                for df in diffs:
+                    for k in range(1, 10):
+                        pitch = df / k
+                        if 2.1 * p_dot <= pitch <= 2.7 * p_dot:
+                            cands.append(pitch)
                 if cands:
                     p_cell = float(np.median(cands))
 
-            # Group sub-columns into 2-column Braille cells using X-coordinate clustering
-            cell_groups: List[Dict[str, Any]] = []
-            i = 0
-            while i < len(sub_cols):
-                col_i_x = float(np.mean([d["rx"] for d in sub_cols[i]]))
-                if i + 1 < len(sub_cols):
-                    col_next_x = float(np.mean([d["rx"] for d in sub_cols[i + 1]]))
-                    gap = col_next_x - col_i_x
-                    if 0.65 * p_dot <= gap <= 1.38 * p_dot:
-                        # 2-column cell (Column 0 and Column 1)
-                        cell_groups.append({
-                            "col0": sub_cols[i],
-                            "col1": sub_cols[i + 1],
-                            "x_start": col_i_x,
-                            "x_end": col_next_x,
-                            "center_x": (col_i_x + col_next_x) / 2.0,
-                        })
-                        i += 2
-                        continue
-                # 1-column cell: check if column 0 or column 1
-                is_col1 = False
-                if cell_groups:
-                    prev_end = cell_groups[-1]["x_end"]
-                    gap_from_prev = col_i_x - prev_end
-                    if 1.85 * p_dot <= gap_from_prev <= 2.85 * p_dot:
-                        is_col1 = True
+            x0 = pairs[0][0] if pairs else col_xs[0]
 
-                if is_col1:
-                    cell_groups.append({
-                        "col0": [],
-                        "col1": sub_cols[i],
-                        "x_start": col_i_x - p_dot,
-                        "x_end": col_i_x,
-                        "center_x": col_i_x - 0.5 * p_dot,
-                    })
-                else:
-                    cell_groups.append({
-                        "col0": sub_cols[i],
-                        "col1": [],
-                        "x_start": col_i_x,
-                        "x_end": col_i_x + p_dot,
-                        "center_x": col_i_x + 0.5 * p_dot,
-                    })
-                i += 1
+            # Assign each dot to (cell_k, col in {0, 1}, row in {0, 1, 2})
+            # Decision boundary between cell k and k+1 is midway between col 1 and next col 0:
+            # col 1 is at 1.0 * p_dot, next col 0 is at p_cell (~2.4 * p_dot). Midpoint = (p_cell + p_dot) / 2
+            half_gap = 0.5 * (p_cell - p_dot)
+            cells_bits: Dict[int, List[int]] = {}
+            for d in line_dots:
+                dx = d["rx"] - x0
+                k = int(math.floor((dx + half_gap) / p_cell))
+                x_cell = x0 + k * p_cell
+                rem = d["rx"] - x_cell
+                col = 0 if rem < (0.5 * p_dot) else 1
+                row = int(round((d["ry"] - best_y0) / p_dot))
+                row = max(0, min(2, row))
+                bits = cells_bits.setdefault(k, [0, 0, 0, 0, 0, 0])
+                bits[col * 3 + row] = 1
 
             line_str = ""
             is_number = False
             is_capital = False
+            prev_k: Optional[int] = None
 
-            def _decode_col_dots(col_dots: List[Dict[str, float]]) -> List[Tuple[Dict[str, float], int]]:
-                sorted_d = sorted(col_dots, key=lambda d: d["ry"])
-                n = len(sorted_d)
-                if n == 0:
-                    return []
-                if n >= 3:
-                    return [(sorted_d[0], 0), (sorted_d[1], 1), (sorted_d[2], 2)]
-                if n == 2:
-                    r0 = int(round((sorted_d[0]["ry"] - best_y0) / p_dot))
-                    r1 = int(round((sorted_d[1]["ry"] - best_y0) / p_dot))
-                    r0 = max(0, min(2, r0))
-                    r1 = max(0, min(2, r1))
-                    diff = sorted_d[1]["ry"] - sorted_d[0]["ry"]
-                    if diff >= 1.45 * p_dot:
-                        return [(sorted_d[0], 0), (sorted_d[1], 2)]
-                    elif r0 == r1:
-                        if r0 == 0:
-                            r1 = 1
-                        elif r0 == 2:
-                            r0 = 1
-                        else:
-                            if sorted_d[0]["ry"] - best_y0 < 0.8 * p_dot:
-                                r0, r1 = 0, 1
-                            else:
-                                r0, r1 = 1, 2
-                    return [(sorted_d[0], r0), (sorted_d[1], r1)]
-                r0 = int(round((sorted_d[0]["ry"] - best_y0) / p_dot))
-                return [(sorted_d[0], max(0, min(2, r0)))]
+            for k in sorted(cells_bits.keys()):
+                if prev_k is not None and (k - prev_k) > 1:
+                    line_str += " "
+                    is_number = False
+                    is_capital = False
+                    word_idx += 1
+                prev_k = k
 
-            for c_idx, cell in enumerate(cell_groups):
-                # Detect word space between cells (space gap >= 3.8 * p_dot)
-                if c_idx > 0:
-                    space_gap = cell["x_start"] - cell_groups[c_idx - 1]["x_end"]
-                    if space_gap >= 3.8 * p_dot:
-                        line_str += " "
-                        is_number = False
-                        is_capital = False
-                        word_idx += 1
-
-                bits = [0, 0, 0, 0, 0, 0]
-                for d, row in _decode_col_dots(cell["col0"]):
-                    bits[0 * 3 + row] = 1
-                for d, row in _decode_col_dots(cell["col1"]):
-                    bits[1 * 3 + row] = 1
-
+                bits = cells_bits[k]
                 bit_str = "".join(str(b) for b in bits)
                 char = cls.BINARY_DICT.get(bit_str, UNKNOWN_CELL_CHAR)
                 active_dots = [idx + 1 for idx, b in enumerate(bits) if b == 1]
                 dots_str = "Dots " + "-".join(str(d) for d in active_dots) if active_dots else "No dots"
 
                 # Compute unrotated visual bounding box center
-                rx_c = cell["center_x"]
+                rx_c = x0 + k * p_cell + 0.5 * p_dot
                 ry_c = best_y0 + p_dot
                 dx_c = rx_c - cx0
                 dy_c = ry_c - cy0
@@ -953,39 +893,14 @@ class OBREngine:
                 line_strings.append(clean_l)
             word_idx += 1
 
-        final_text = " ".join(line_strings).strip().replace("\n", " ")
+        final_text = "\n".join(line_strings).strip()
         if not final_text:
-            return {"readable": False, "reason": "no_braille", "text": "", "cells": [], "boxes": debug_boxes}
-
-        # Token filtering & edge-noise suppression:
-        tokens = [t.strip() for t in final_text.split() if t.strip()]
-        garbage_punct = {'?', '"', ',', ':', '!', ';', '.'}
-        valid_tokens = []
-        for token in tokens:
-            if any(ch in garbage_punct for ch in token):
-                continue
-            if not any(ch.isalnum() for ch in token):
-                continue
-            valid_tokens.append(token)
-
-        if not valid_tokens:
-            return {"readable": False, "reason": "no_braille", "text": "", "cells": [], "boxes": debug_boxes}
-
-        has_multi = any(len(t) >= 2 and any(c.isalnum() for c in t) for t in valid_tokens)
-        if has_multi:
-            while len(valid_tokens) > 1 and len(valid_tokens[0]) == 1:
-                valid_tokens.pop(0)
-            while len(valid_tokens) > 1 and len(valid_tokens[-1]) == 1:
-                valid_tokens.pop(-1)
-
-        cleaned_text = " ".join(valid_tokens).strip()
-        if not cleaned_text or not any(c.isalnum() for c in cleaned_text):
             return {"readable": False, "reason": "no_braille", "text": "", "cells": [], "boxes": debug_boxes}
 
         return {
             "readable": True,
             "reason": "ok",
-            "text": cleaned_text,
+            "text": final_text,
             "cells": cell_events,
             "boxes": debug_boxes,
             "skew_deg": skew_deg,
@@ -1026,6 +941,17 @@ class OBREngine:
             if not ok:
                 return 0.0
 
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+            # Contrast and dark-pixel distribution gates:
+            # 1. Reject computer screens / non-paper frames (e.g. test_real_cam.jpg) where dark pixels dominate
+            if float(np.mean(gray < 90)) > 0.15:
+                return 0.0
+
+            # 2. Reject high-frequency noise frames where std(gray - blur) is abnormally high
+            blur = cv2.GaussianBlur(gray, (5, 5), 0)
+            if float(np.std(gray.astype(np.float32) - blur.astype(np.float32))) > 8.0:
+                return 0.0
+
             h, w = image.shape[:2]
             if max(w, h) > 640:
                 scale = 640.0 / float(max(w, h))
@@ -1039,23 +965,12 @@ class OBREngine:
                 if len(dots_e) > len(dots):
                     dots, dot_diam = dots_e, diam_e
             n = len(dots)
-            if n < 3 or n > 2500:
-                return 0.0
-
-            # Gate 3: dot coverage fraction — noise/static fills >10% of frame area with tiny blobs;
-            # real Braille pages never exceed ~8% coverage (dots are sparse on white paper).
-            # Also applies a generous absolute cap for extreme static (>>2000 dots on 320×320).
-            sh, sw = small.shape[:2]
-            frame_area = float(sw * sh)
-            import math as _math
-            dot_coverage = sum(_math.pi * (d["d"] * 0.5) ** 2 for d in dots) / frame_area
-            if dot_coverage > 0.10:
-                logger.debug("detect_braille_presence: dot coverage %.1f%% exceeds 10%% gate", dot_coverage * 100)
+            if n < 4 or n > 2500:
                 return 0.0
 
             diams = np.array([d["d"] for d in dots], dtype=np.float64)
             med_d = float(np.median(diams))
-            if med_d < 2.0:
+            if med_d < 1.8:
                 return 0.0
             std_d = float(np.std(diams))
             diam_cv = std_d / max(1e-3, med_d)
@@ -1214,6 +1129,11 @@ class OBREngine:
             logger.info("Scanner result: quality gate failed reason=%s lap_var=%.2f", reason, lap_var)
             return {"readable": False, "reason": reason, "text": "", "cells": [], "lap_var": lap_var}
 
+        # Braille presence confidence heuristic gate: reject computer screens, terminal text, and random noise
+        gray_full = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+        if float(np.mean(gray_full < 90)) > 0.15 or self.braille_presence_confidence(image) < 0.20:
+            return {"readable": False, "reason": "no_braille", "text": "", "cells": [], "lap_var": lap_var}
+
         h, w = image.shape[:2]
         use_full = full_frame if full_frame is not None else (
             os.environ.get("BRAILCE_FORCE_ROI", "") != "1"
@@ -1279,8 +1199,8 @@ class OBREngine:
             cv2.circle(dbg_img, (px, py), r, (0, 255, 0), 1)
 
         # Always save debug image even when < 2 dots or too small
-        if len(dots) < 2 or (0 < dot_diam < 2.0):
-            res_reason = "too_small" if (0 < dot_diam < 2.0) else "no_braille"
+        if len(dots) < 2 or (0 < dot_diam < 3.8):
+            res_reason = "too_small" if (0 < dot_diam < 3.8) else "no_braille"
             cv2.putText(dbg_img, f"UNREADABLE: {res_reason}", (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 255), 2)
             for dbg_path in ("/tmp/last_scan_debug.jpg", "debug_scan/last_scan.jpg"):
                 try:
@@ -1301,7 +1221,7 @@ class OBREngine:
                 "lap_var": lap_var,
             }
 
-        res = self.decode_dots_to_text(dots, dot_diam, crop.shape, single_line=not use_full)
+        res = self.decode_dots_to_text(dots, dot_diam, crop.shape, single_line=False)
         res["lap_var"] = lap_var
         res["dots"] = dots
 
@@ -1329,9 +1249,6 @@ class OBREngine:
         unknown_count = sum(1 for c in cells if c.get("char") == UNKNOWN_CELL_CHAR)
         unknown_ratio = (unknown_count / len(cells)) if cells else 0.0
 
-        # Ensure decoded text has strictly no \n (Single-Line mode only)
-        res["text"] = str(res.get("text", "")).replace("\n", " ").strip()
-
         conf = self.braille_presence_confidence(clean_crop)
         res["confidence"] = conf
 
@@ -1340,9 +1257,6 @@ class OBREngine:
         unknown_chars_count = sum(1 for ch in text_chars if ch == UNKNOWN_CELL_CHAR)
         unknown_text_ratio = (unknown_chars_count / len(text_chars)) if text_chars else 1.0
         has_valid_letter = any(ch.isalnum() for ch in text_chars)
-
-        conf = self.braille_presence_confidence(clean_crop)
-        res["confidence"] = conf
 
         # Reject if no characters decoded or high unknown ratio (>30% unknown) or < 3 dots
         if not str(res.get("text", "")).strip():

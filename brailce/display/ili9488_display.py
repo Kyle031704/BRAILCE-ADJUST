@@ -551,7 +551,6 @@ class ILI9488Display(DisplayDevice):
         self._draw.rectangle([(30, 226), (450, 244)], fill=(15, 23, 42), outline=(139, 92, 246))
         self._draw.rectangle([(30, 226), (360, 244)], fill=(168, 85, 247))
 
-        self.show_status(get_string("AI_THINKING", self._language))
         self._flush_to_hardware()
 
     def show_ai_response(self, response: str, query: Optional[str] = None) -> None:

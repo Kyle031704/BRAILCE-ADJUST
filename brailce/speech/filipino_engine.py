@@ -21,8 +21,10 @@ import logging
 import os
 import queue
 import re
+import socket
 import tempfile
 import threading
+import time
 import wave
 from typing import Optional, List, Tuple, Any
 
@@ -40,6 +42,25 @@ from brailce.speech.audio_normalize import (
 from brailce.speech.base import SpeechEngine
 
 logger = logging.getLogger(__name__)
+
+
+_LAST_INTERNET_CHECK_TIME = 0.0
+_LAST_INTERNET_CHECK_RESULT = False
+
+def is_internet_available(cache_ttl_s: float = 5.0) -> bool:
+    """Fast check whether an internet connection is actively reachable."""
+    global _LAST_INTERNET_CHECK_TIME, _LAST_INTERNET_CHECK_RESULT
+    now = time.time()
+    if now - _LAST_INTERNET_CHECK_TIME < cache_ttl_s:
+        return _LAST_INTERNET_CHECK_RESULT
+    try:
+        sock = socket.create_connection(("1.1.1.1", 53), timeout=0.25)
+        sock.close()
+        _LAST_INTERNET_CHECK_RESULT = True
+    except Exception:
+        _LAST_INTERNET_CHECK_RESULT = False
+    _LAST_INTERNET_CHECK_TIME = now
+    return _LAST_INTERNET_CHECK_RESULT
 
 
 def pitch_shift_pcm(samples: Any, semitones: float, sr: int = TARGET_SAMPLE_RATE) -> Any:
@@ -651,36 +672,9 @@ class FilipinoEngine:
             self._enqueue("wav", wav_path, interrupt=interrupt)
 
     def enqueue_character(self, character: str, use_filipino_voice: bool = True, style: Optional[str] = None) -> None:
-        """Non-blocking queued character feedback using the same speech call that words use.
-
-        Priority for A-Z letters when use_filipino_voice=True:
-          1. char_{UPPER}.wav played directly via enqueue_wav.
-          Never falls back to English voice, Piper, MMS-TTS, sherpa-onnx, or espeak for letters.
-        """
+        """Non-blocking queued character feedback using the single worker thread."""
         if not character:
             return
-
-        clean = character.strip()
-        # Single letters A-Z: ALWAYS resolve strictly to char_{ch.upper()}.wav
-        if len(clean) == 1 and clean.isalpha():
-            char_wav = get_filipino_character_path(clean.upper())
-            if char_wav:
-                self.enqueue_wav(char_wav, interrupt=False)
-            return
-
-        # Digits, operators, punctuation:
-        char_wav = get_filipino_character_path(clean)
-        if char_wav:
-            self.enqueue_wav(char_wav, interrupt=False)
-            return
-
-        if use_filipino_voice:
-            from brailce.i18n.fil_keys import get_filipino_keystroke_name
-            ch_name = get_filipino_keystroke_name(character, style=style or self.letter_style)
-            if ch_name:
-                self.enqueue_text(ch_name, interrupt=False)
-                return
-
         self._enqueue("char", (character, use_filipino_voice, style), interrupt=False)
 
     def play_announcement(self, lang: str) -> bool:
@@ -737,8 +731,6 @@ class FilipinoEngine:
             "nag-iisip mangyaring maghintay": "thinking_fil.wav",
             "nag iisip mangyaring maghintay": "thinking_fil.wav",
             "wikang filipino": "switched_fil.wav",
-            "kumusta ka": "ai_kumusta_ka.wav",
-            "kumusta": "ai_kumusta.wav",
             "malayang paglalagay mag-type ng mga titik at salita": "mode_free_input.wav",
             "matematika mag-type ng mga numero at operasyon": "mode_math.wav",
             "ai assistant mode i-type ang iyong tanong pagkatapos ay pindutin ang enter": "mode_ai.wav",
@@ -812,9 +804,9 @@ class FilipinoEngine:
                 model=model_path,
                 tokens=tokens_path,
                 data_dir="",
-                noise_scale=0.333,
-                noise_scale_w=0.4,
-                length_scale=1.06,
+                noise_scale=0.01,
+                noise_scale_w=0.01,
+                length_scale=1.00,
             )
             model_config = sherpa_onnx.OfflineTtsModelConfig(
                 vits=vits_config,
@@ -906,11 +898,12 @@ class FilipinoEngine:
     def synthesize_to_wav(self, text: str, out_wav_path: str) -> bool:
         """
         Synthesize full Filipino sentence with natural prosody.
-        1. Primary: Edge-TTS fil-PH-BlessicaNeural (warm female voice, natural cadence).
+        1. Primary: Edge-TTS fil-PH-BlessicaNeural if internet is reachable.
         2. Secondary offline fallback: sherpa-onnx MMS-TTS tgl VITS if installed.
         """
-        if self._synthesize_edge_blessica(text, out_wav_path):
-            return True
+        if is_internet_available():
+            if self._synthesize_edge_blessica(text, out_wav_path):
+                return True
         if self._synthesize_sherpa_filipino(text, out_wav_path):
             return True
         return False
@@ -948,8 +941,8 @@ class FilipinoEngine:
                 norm_clause = normalize_for_sherpa_filipino(clause)
                 if not norm_clause:
                     continue
-                # For short single letter names, keep speed slightly crisper to prevent stretching
-                speed_val = 1.00 if len(norm_clause) <= 4 else 0.94
+                # Fixed constant speed regardless of sentence length
+                speed_val = 1.00
                 audio = tts.generate(norm_clause, sid=0, speed=speed_val)
                 if audio is None or len(audio.samples) == 0:
                     continue
@@ -1052,8 +1045,28 @@ class FilipinoEngine:
                             tail_pad = int(framerate * 0.010)
                             start_idx = max(0, nz[0] - lead_pad)
                             end_idx = min(len(arr), nz[-1] + 1 + tail_pad)
-                            trimmed = arr[start_idx:end_idx].copy()
-                            word_arr = trimmed
+                            trimmed = arr[start_idx:end_idx].copy().astype(np.float64)
+
+                            # Normalize RMS loudness across concatenated word clips
+                            active_mask = np.abs(trimmed) > 200
+                            cur_rms = np.sqrt(np.mean(trimmed[active_mask] ** 2)) if np.any(active_mask) else 0.0
+                            if cur_rms > 10.0:
+                                target_rms = 4200.0
+                                gain = target_rms / cur_rms
+                                peak_pre = np.max(np.abs(trimmed))
+                                if peak_pre * gain > 28000:
+                                    gain = 28000 / peak_pre
+                                trimmed *= gain
+
+                            # 4ms micro-fade at edges
+                            mf_len = min(int(framerate * 0.004), len(trimmed) // 4)
+                            if mf_len > 1:
+                                mf_in = 0.5 * (1.0 - np.cos(np.linspace(0, np.pi, mf_len)))
+                                mf_out = 0.5 * (1.0 + np.cos(np.linspace(0, np.pi, mf_len)))
+                                trimmed[:mf_len] *= mf_in
+                                trimmed[-mf_len:] *= mf_out
+
+                            word_arr = np.clip(np.round(trimmed), -32767, 32767).astype(np.int16)
                         else:
                             word_arr = arr
                     except Exception:
@@ -1136,14 +1149,26 @@ class FilipinoEngine:
                         arr = np.frombuffer(raw_frames, dtype=np.int16).copy()
                         nz = np.where(np.abs(arr) > 120)[0]
                         if nz.size > 0:
-                            trimmed = arr[nz[0] : nz[-1] + 1].copy()
+                            trimmed = arr[nz[0] : nz[-1] + 1].copy().astype(np.float64)
+
+                            # Normalize RMS loudness
+                            active_mask = np.abs(trimmed) > 200
+                            cur_rms = np.sqrt(np.mean(trimmed[active_mask] ** 2)) if np.any(active_mask) else 0.0
+                            if cur_rms > 10.0:
+                                target_rms = 4200.0
+                                gain = target_rms / cur_rms
+                                peak_pre = np.max(np.abs(trimmed))
+                                if peak_pre * gain > 28000:
+                                    gain = 28000 / peak_pre
+                                trimmed *= gain
+
                             mf_len = min(int(framerate * 0.004), len(trimmed) // 4)
                             if mf_len > 1:
                                 mf_in = 0.5 * (1.0 - np.cos(np.linspace(0, np.pi, mf_len)))
                                 mf_out = 0.5 * (1.0 + np.cos(np.linspace(0, np.pi, mf_len)))
-                                trimmed[:mf_len] = (trimmed[:mf_len].astype(np.float64) * mf_in).astype(np.int16)
-                                trimmed[-mf_len:] = (trimmed[-mf_len:].astype(np.float64) * mf_out).astype(np.int16)
-                            pcm_data = trimmed.tobytes()
+                                trimmed[:mf_len] *= mf_in
+                                trimmed[-mf_len:] *= mf_out
+                            pcm_data = np.clip(np.round(trimmed), -32767, 32767).astype(np.int16).tobytes()
                         else:
                             pcm_data = raw_frames
                     except Exception:

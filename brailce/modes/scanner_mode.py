@@ -528,7 +528,7 @@ class ScannerMode(BaseMode):
 
             for cand in candidates:
                 self._scanned_frame = cand
-                # Strict Center-Strip ROI: process strictly the single-line window matching the LCD reticle
+                # Center-Strip ROI: process ROI window matching the LCD reticle while supporting multi-line clustering
                 res = self.app.obr.process_image(cand, full_frame=False)
                 if res.get("readable") and str(res.get("text", "")).strip():
                     best_result = res
