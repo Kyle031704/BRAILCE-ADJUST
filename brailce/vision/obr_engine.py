@@ -455,7 +455,7 @@ class OBREngine:
         if image is None or image.size == 0:
             return False
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if (cv2 is not None and len(image.shape) == 3) else image
-        return float(np.percentile(gray, 90)) > 55.0 and float(np.std(gray)) > 3.5
+        return float(np.percentile(gray, 90)) > 35.0 and float(np.std(gray)) > 0.4
 
     @staticmethod
     def check_image_quality(image: np.ndarray) -> Tuple[bool, str, float]:
@@ -467,11 +467,11 @@ class OBREngine:
             return False, "no_braille", 0.0
 
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
-        if float(np.percentile(gray, 90)) <= 55.0 or float(np.std(gray)) <= 3.5:
+        if float(np.percentile(gray, 90)) <= 35.0 or float(np.std(gray)) <= 0.4:
             return False, "no_braille", 0.0
 
         lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-        if lap_var < 4.0:
+        if lap_var < 2.0:
             return False, "blurry", lap_var
 
         return True, "ok", lap_var
@@ -512,8 +512,8 @@ class OBREngine:
         # Robust thresholding: Braille dots typically occupy < 2% of the page
         p98_d = float(np.percentile(dark_resp, 98.0))
         p98_l = float(np.percentile(light_resp, 98.0))
-        thresh_d = max(4.0, p98_d * 0.42)
-        thresh_l = max(4.0, p98_l * 0.42)
+        thresh_d = max(2.5, p98_d * 0.30)
+        thresh_l = max(2.5, p98_l * 0.30)
 
         mask_d = (dark_resp >= thresh_d).astype(np.uint8)
         mask_l = (light_resp >= thresh_l).astype(np.uint8)
@@ -575,7 +575,7 @@ class OBREngine:
             return [], 0.0
 
         est_d = float(np.median([b["d"] for b in dark_blobs]))
-        max_pair_dist = max(4.0, est_d * 1.15)
+        max_pair_dist = max(7.0, est_d * 1.8)
 
         # Match paired shadow and highlight for embossed Braille
         paired_dots: List[Dict[str, float]] = []
@@ -591,10 +591,10 @@ class OBREngine:
                     best_dist = dist
                     best_l = l_idx
 
-            if best_l is not None and best_dist >= (est_d * 0.25):
+            if best_l is not None and best_dist >= (est_d * 0.20):
                 l_match = light_blobs[best_l]
                 diam_ratio = max(d_blob["d"], l_match["d"]) / max(1e-3, min(d_blob["d"], l_match["d"]))
-                if diam_ratio <= 1.6:
+                if diam_ratio <= 1.8:
                     used_l.add(best_l)
                     # Center of embossed dot is midpoint between shadow and highlight
                     cx = (d_blob["x"] + l_match["x"]) / 2.0
@@ -607,11 +607,11 @@ class OBREngine:
                 # Solid ink dot or top-lit spot
                 paired_dots.append({"x": d_blob["x"], "y": d_blob["y"], "d": d_blob["d"], "score": d_blob["score"]})
 
-        # Non-maximum suppression / deduplicate any dots closer than 0.72 * est_d
+        # Non-maximum suppression / deduplicate any duplicate crescent fragments closer than suppress_r
         # Ensures that highlight and shadow crescents from a single embossed dot are never split into 2 dots
         paired_dots.sort(key=lambda d: d["score"], reverse=True)
         final_dots: List[Dict[str, float]] = []
-        suppress_r = max(4.0, est_d * 0.72)
+        suppress_r = max(6.0, min(13.0, est_d * 1.35))
         for cand in paired_dots:
             if any(math.hypot(cand["x"] - ex["x"], cand["y"] - ex["y"]) <= suppress_r for ex in final_dots):
                 continue
@@ -967,12 +967,12 @@ class OBREngine:
                 small = image
 
             dots, dot_diam = self.detect_dots(small)
-            if len(dots) < 4:
+            if len(dots) < 6:
                 dots_e, diam_e = self.detect_dots(self.enhance_contrast(small))
-                if len(dots_e) > len(dots) and len(dots_e) <= 300 and diam_e >= 3.5:
+                if len(dots_e) > len(dots):
                     dots, dot_diam = dots_e, diam_e
             n = len(dots)
-            if n < 6 or n > 350:
+            if n < 3 or n > 2500:
                 return 0.0
 
             # Gate 3: dot coverage fraction — noise/static fills >10% of frame area with tiny blobs;
@@ -1061,22 +1061,22 @@ class OBREngine:
             logger.debug("braille_presence_confidence error: %s", exc)
             return 0.0
 
-    def detect_braille_presence(self, image: np.ndarray, confidence_threshold: float = 0.42) -> bool:
+    def detect_braille_presence(self, image: np.ndarray, confidence_threshold: float = 0.28) -> bool:
         """
-        Returns True when braille_presence_confidence() >= confidence_threshold (default 0.42).
-        Lowered from 0.60: real partial Braille pages with few cells in frame scored ~0.47-0.58.
+        Returns True when braille_presence_confidence() >= confidence_threshold (default 0.28).
+        Lowered from 0.42 to reliably detect embossed Braille on physical paper under diffuse room light.
         Backward-compatible bool interface used by ScannerMode detection worker.
         """
         return self.braille_presence_confidence(image) >= confidence_threshold
 
-    def assess_braille_distance(self, image: np.ndarray, confidence_threshold: float = 0.40) -> Dict[str, Any]:
+    def assess_braille_distance(self, image: np.ndarray, confidence_threshold: float = 0.28) -> Dict[str, Any]:
         """
         Real-time distance and readiness assessment for handheld camera aiming:
         Evaluates dot count, median dot diameter, and pitch to guide user:
           - "no_braille": insufficient dots or low presence confidence
-          - "too_close": dot diameter > 16px (camera closer than ~10cm)
-          - "too_far": dot diameter < 5px (camera farther than ~20cm)
-          - "ok": dot diameter 5px..16px and confidence >= threshold (nominally 12-15cm)
+          - "too_close": dot diameter > 18px or pitch > 55px (camera closer than ~8cm)
+          - "too_far": dot diameter < 2.5px or pitch < 11px (camera farther than ~24cm)
+          - "ok": dot diameter 2.5px..18px and confidence >= threshold (nominally 10-22cm)
         """
         if image is None or cv2 is None or getattr(image, "size", 0) == 0:
             return {"state": "no_braille", "confidence": 0.0, "dot_diameter": 0.0, "dot_pitch": 0.0, "dot_count": 0}
@@ -1095,17 +1095,17 @@ class OBREngine:
         dots, dot_diam = self.detect_dots(small)
         if len(dots) < 6:
             dots_e, diam_e = self.detect_dots(self.enhance_contrast(small))
-            if len(dots_e) > len(dots) and len(dots_e) <= 300 and diam_e >= 3.5:
+            if len(dots_e) > len(dots) and len(dots_e) <= 2500 and diam_e >= 2.0:
                 dots, dot_diam = dots_e, diam_e
-        if len(dots) < 6 or len(dots) > 350:
+        if len(dots) < 3 or len(dots) > 2500:
             return {"state": "no_braille", "confidence": conf, "dot_diameter": 0.0, "dot_pitch": 0.0, "dot_count": len(dots)}
 
         skew_deg, p_dot = self._estimate_skew_and_pitch(dots, dot_diam)
 
         # Distance thresholding based on physical Braille geometry
-        if dot_diam < 5.0 or p_dot < 12.0:
+        if dot_diam < 2.5 or p_dot < 11.0:
             state = "too_far"
-        elif dot_diam > 16.5 or p_dot > 42.0:
+        elif dot_diam > 18.0 or p_dot > 55.0:
             state = "too_close"
         else:
             state = "ok"
@@ -1174,7 +1174,7 @@ class OBREngine:
         dots, dot_diam = self.detect_dots(clean_crop)
 
         # 3b. Adaptive contrast enhancement fallback for faint dots under diffuse lighting
-        if len(dots) < 4:
+        if len(dots) < 8:
             enhanced_crop = self.enhance_contrast(clean_crop)
             e_dots, e_diam = self.detect_dots(enhanced_crop)
             if len(e_dots) > len(dots):
@@ -1189,7 +1189,7 @@ class OBREngine:
             c_crop = image[c_y0 : c_y0 + c_roi_h, c_x0 : c_x0 + c_roi_w].copy()
             clean_c = self.suppress_printed_ink(c_crop)
             c_dots, c_diam = self.detect_dots(clean_c)
-            if len(c_dots) < 4:
+            if len(c_dots) < 8:
                 c_dots_e, c_diam_e = self.detect_dots(self.enhance_contrast(clean_c))
                 if len(c_dots_e) > len(c_dots):
                     c_dots, c_diam = c_dots_e, c_diam_e
@@ -1264,34 +1264,36 @@ class OBREngine:
         # Ensure decoded text has strictly no \n (Single-Line mode only)
         res["text"] = str(res.get("text", "")).replace("\n", " ").strip()
 
-        # Reject garbage: if >25% of decoded text is '?', ',', ''', ';', or if no valid letters/digits exist
+        conf = self.braille_presence_confidence(clean_crop)
+        res["confidence"] = conf
+
+        # Reject garbage: if >30% of decoded text is '?', or if no valid letters/digits exist
         text_chars = [ch for ch in str(res.get("text", "")) if not ch.isspace()]
-        garbage_chars = {"?", ",", "'", ";"}
-        garbage_count = sum(1 for ch in text_chars if ch in garbage_chars)
-        garbage_ratio = (garbage_count / len(text_chars)) if text_chars else 1.0
+        unknown_chars_count = sum(1 for ch in text_chars if ch == UNKNOWN_CELL_CHAR)
+        unknown_text_ratio = (unknown_chars_count / len(text_chars)) if text_chars else 1.0
         has_valid_letter = any(ch.isalnum() for ch in text_chars)
 
         conf = self.braille_presence_confidence(clean_crop)
         res["confidence"] = conf
 
-        # Reject if no characters decoded or high unknown ratio (>25% unknown) or < 6 dots
+        # Reject if no characters decoded or high unknown ratio (>30% unknown) or < 3 dots
         if not str(res.get("text", "")).strip():
             res["readable"] = False
             res["reason"] = "no_braille"
             res["text"] = ""
-        elif len(dots) < 6:
+        elif len(dots) < 3:
             res["readable"] = False
             res["reason"] = "no_braille"
             res["text"] = ""
-        elif conf < 0.35 and len(dots) < 8:
+        elif not has_valid_letter:
             res["readable"] = False
             res["reason"] = "no_braille"
             res["text"] = ""
-        elif garbage_ratio > 0.25 or not has_valid_letter:
+        elif unknown_text_ratio > 0.30:
             res["readable"] = False
             res["reason"] = "no_braille"
             res["text"] = ""
-        elif unknown_ratio > 0.25:
+        elif unknown_ratio > 0.30:
             res["readable"] = False
             res["reason"] = "no_braille"
             res["text"] = ""

@@ -53,7 +53,8 @@ _piper_missing_warned = False
 # Option 1 (carrier-sentence slicing "Please say: <word>." + brailce/audio/words_en/ cache) is used
 # rather than Option 2 ([[ phonemes ]] overrides) because it generalizes to arbitrary vocabulary
 # without Piper build-flag dependencies while keeping "is" stressed and /w/, /wh/ onsets intact.
-PIPER_LENGTH_SCALE = "1.05"
+# length_scale 1.14 provides a calm, clear, pedagogical explanation pace without rushed delivery.
+PIPER_LENGTH_SCALE = "1.14"
 PIPER_NOISE_SCALE = "0.5"
 PIPER_NOISE_W = "0.6"
 
@@ -158,7 +159,7 @@ class PiperEngine(SpeechEngine):
         self,
         binary_path: Optional[str] = None,
         model_path: Optional[str] = None,
-        rate: int = 160,
+        rate: int = 145,
         volume: int = 100,
         max_queue_size: int = 50,
     ) -> None:

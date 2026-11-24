@@ -59,7 +59,7 @@ class SpeechService(SpeechEngine):
         piper_engine: Optional[SpeechEngine] = None,
         behavior: str = "character_and_word",
         voice: str = "en_US-ryan-medium.onnx",
-        rate: int = 160,
+        rate: int = 145,
         volume: int = 100,
         pitch: int = 50,
         filipino_letter_voice: str = "filipino",

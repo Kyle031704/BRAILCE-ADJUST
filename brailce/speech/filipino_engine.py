@@ -26,6 +26,8 @@ import threading
 import wave
 from typing import Optional, List, Tuple, Any
 
+import numpy as np
+
 from brailce.i18n.fil_lexicon import apply_filipino_lexicon
 from brailce.speech.audio_device import AudioDeviceCoordinator
 from brailce.speech.audio_normalize import (
@@ -844,23 +846,26 @@ class FilipinoEngine:
             import numpy as np
 
             async def _run():
-                comm = edge_tts.Communicate(clean, "fil-PH-BlessicaNeural", rate="-4%")
+                comm = edge_tts.Communicate(
+                    clean,
+                    "fil-PH-BlessicaNeural",
+                    rate="-4%",
+                    connect_timeout=2,
+                    receive_timeout=3,
+                )
                 data = bytearray()
-                async for chunk in comm.stream():
-                    if chunk["type"] == "audio":
-                        data.extend(chunk["data"])
-                return bytes(data)
+                async def _stream():
+                    async for chunk in comm.stream():
+                        if chunk["type"] == "audio":
+                            data.extend(chunk["data"])
+                    return bytes(data)
+                return await asyncio.wait_for(_stream(), timeout=2.5)
 
+            loop = asyncio.new_event_loop()
             try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    import concurrent.futures
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                        audio_bytes = pool.submit(asyncio.run, _run()).result(timeout=15.0)
-                else:
-                    audio_bytes = loop.run_until_complete(_run())
-            except RuntimeError:
-                audio_bytes = asyncio.run(_run())
+                audio_bytes = loop.run_until_complete(_run())
+            finally:
+                loop.close()
 
             if not audio_bytes:
                 return False
@@ -1020,7 +1025,6 @@ class FilipinoEngine:
         gap_semicolon = gap_comma
 
         all_samples = np.array([], dtype=np.int16)
-        import numpy as np
 
         for clause, delim in clauses:
             norm_clause = normalize_for_sherpa_filipino(clause)
@@ -1030,10 +1034,8 @@ class FilipinoEngine:
                 cached_wav = get_filipino_word_path(w)
                 word_arr = None
                 if not cached_wav or not os.path.isfile(cached_wav):
-                    # Out-of-vocabulary fallback: synthesize single word
-                    tmp_word_wav = os.path.join(_find_filipino_audio_dir(), f"word_{w}.wav")
-                    if self.synthesize_to_wav(w, tmp_word_wav) and os.path.isfile(tmp_word_wav):
-                        cached_wav = tmp_word_wav
+                    # Check single letter or digit in bank
+                    cached_wav = get_filipino_character_path(w)
 
                 if cached_wav and os.path.isfile(cached_wav):
                     try:
