@@ -481,7 +481,7 @@ class OBREngine:
         h, w = gray.shape[:2]
         gray_f = gray.astype(np.float32)
 
-        # 3-octave multi-scale Gaussian smoothing
+        # 3-octave multi-scale Gaussian smoothing (covers 3px to 18px dot radius across wide distance range)
         g0 = cv2.GaussianBlur(gray_f, (0, 0), 1.0)
         g1 = cv2.GaussianBlur(gray_f, (0, 0), 2.0)
         g2 = cv2.GaussianBlur(gray_f, (0, 0), 4.0)
@@ -616,7 +616,7 @@ class OBREngine:
         pts = np.array([[d["x"], d["y"]] for d in dots], dtype=np.float64)
         n = len(pts)
 
-        # 1. Direct Nearest-Neighbor p_dot measurement
+        # 1. Direct Nearest-Neighbor p_dot measurement (scale-invariant from 15px to 80px+)
         nn_dists: List[float] = []
         for i in range(n):
             diffs = pts - pts[i]
@@ -625,7 +625,13 @@ class OBREngine:
             if len(d):
                 nn_dists.append(float(np.min(d)))
 
-        p_dot = float(np.median(nn_dists)) if nn_dists else max(12.0, dot_diam * 2.5)
+        if nn_dists:
+            nns = np.array(sorted(nn_dists))
+            # Dynamic scale-invariant dot pitch from 25th-40th percentile of valid nearest-neighbor distances
+            p_dot = float(np.percentile(nns, 35))
+            p_dot = max(12.0, min(120.0, p_dot))
+        else:
+            p_dot = max(12.0, dot_diam * 2.5)
 
         # 2. Skew estimation from orthogonal neighbor vectors around 1.0 * p_dot
         angles_deg: List[float] = []
@@ -654,6 +660,7 @@ class OBREngine:
         dots: List[Dict[str, float]],
         dot_diam: float,
         image_shape: Tuple[int, ...],
+        single_line: bool = False,
     ) -> Dict[str, Any]:
         """
         Group detected dots into Braille lines, fit 2x3 cell grids, and translate
@@ -677,20 +684,28 @@ class OBREngine:
             ry = dx * sin_a + dy * cos_a + cy0
             rot_dots.append({**d, "rx": rx, "ry": ry})
 
-        # 1. Cluster into text lines by Y separation:
-        # A single Braille line has height <= 2.0 * p_dot.
-        # Line grouping: dots with ry within 2.6 * p_dot of the line's top belong to the same line.
+        # Single-line mode if explicitly requested (e.g. slim ROI scan) or if all dots span a single line height
         rot_dots.sort(key=lambda d: d["ry"])
-        lines: List[List[Dict[str, float]]] = []
-        for d in rot_dots:
-            if not lines:
-                lines.append([d])
-            else:
-                line_min_y = min(item["ry"] for item in lines[-1])
-                if (d["ry"] - line_min_y) <= (p_dot * 2.60):
-                    lines[-1].append(d)
-                else:
+        min_ry = rot_dots[0]["ry"]
+        max_ry = rot_dots[-1]["ry"]
+        span_y = max_ry - min_ry
+
+        if single_line or span_y <= (p_dot * 3.4):
+            rot_dots.sort(key=lambda d: d["rx"])
+            lines: List[List[Dict[str, float]]] = [rot_dots]
+        else:
+            lines = []
+            for d in rot_dots:
+                if not lines:
                     lines.append([d])
+                else:
+                    line_min_y = min(item["ry"] for item in lines[-1])
+                    if (d["ry"] - line_min_y) <= (p_dot * 2.80):
+                        lines[-1].append(d)
+                    else:
+                        lines.append([d])
+            for l in lines:
+                l.sort(key=lambda d: d["rx"])
 
         cell_pitch_default = p_dot * 2.4
         line_strings: List[str] = []
@@ -733,13 +748,13 @@ class OBREngine:
 
             col_xs = [float(np.mean([d["rx"] for d in sc])) for sc in sub_cols]
 
-            # Find paired columns (dx in [0.75 * p_dot, 1.25 * p_dot] with ±25% tolerance for stylus-and-slate)
+            # Find paired columns (dx in [0.70 * p_dot, 1.30 * p_dot] with tolerance for stylus-and-slate)
             # Intra-cell column gap is ~1.0 * p_dot, whereas inter-cell gap is >= 1.4 * p_dot.
             pairs: List[Tuple[float, float]] = []
             i = 0
             while i < len(col_xs) - 1:
                 dx = col_xs[i + 1] - col_xs[i]
-                if 0.75 * p_dot <= dx <= 1.25 * p_dot:
+                if 0.70 * p_dot <= dx <= 1.30 * p_dot:
                     pairs.append((col_xs[i], col_xs[i + 1]))
                     i += 2
                 else:
@@ -748,19 +763,19 @@ class OBREngine:
             p_cell = p_dot * 2.45
             if len(pairs) >= 2:
                 diffs = [pairs[j + 1][0] - pairs[j][0] for j in range(len(pairs) - 1)]
-                cands = []
-                for df in diffs:
-                    for k in range(1, 10):
-                        pitch = df / k
-                        if 2.1 * p_dot <= pitch <= 2.8 * p_dot:
-                            cands.append(pitch)
+                cands = [df / k for df in diffs for k in range(1, 15) if 1.9 * p_dot <= (df / k) <= 3.2 * p_dot]
+                if cands:
+                    p_cell = float(np.median(cands))
+            elif len(col_xs) >= 2:
+                diffs = [col_xs[j + 1] - col_xs[j] for j in range(len(col_xs) - 1)]
+                cands = [df / k for df in diffs for k in range(1, 15) if 1.9 * p_dot <= (df / k) <= 3.2 * p_dot]
                 if cands:
                     p_cell = float(np.median(cands))
 
             if pairs:
                 x0 = pairs[0][0]
                 if col_xs and col_xs[0] < (x0 - 0.4 * p_dot):
-                    n_shifts = int(math.ceil((x0 - col_xs[0] + 0.2 * p_dot) / p_cell))
+                    n_shifts = max(1, int(round((x0 - col_xs[0]) / p_cell)))
                     x0 -= n_shifts * p_cell
             else:
                 x0 = col_xs[0] if col_xs else 0.0
@@ -1180,7 +1195,7 @@ class OBREngine:
                 "lap_var": lap_var,
             }
 
-        res = self.decode_dots_to_text(dots, dot_diam, crop.shape)
+        res = self.decode_dots_to_text(dots, dot_diam, crop.shape, single_line=not use_full)
         res["lap_var"] = lap_var
         res["dots"] = dots
 
@@ -1211,7 +1226,7 @@ class OBREngine:
         conf = self.braille_presence_confidence(clean_crop)
         res["confidence"] = conf
 
-        # Reject if no characters decoded or high unknown ratio on large text blocks
+        # Reject if no characters decoded or high unknown ratio (>30% unknown)
         if not str(res.get("text", "")).strip():
             res["readable"] = False
             res["reason"] = "no_braille"
@@ -1220,7 +1235,7 @@ class OBREngine:
             res["readable"] = False
             res["reason"] = "no_braille"
             res["text"] = ""
-        elif len(cells) >= 8 and unknown_ratio > 0.40:
+        elif unknown_ratio > 0.30:
             res["readable"] = False
             res["reason"] = "no_braille"
             res["text"] = ""

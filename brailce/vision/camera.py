@@ -123,6 +123,16 @@ class SimulatedCamera(CameraDevice):
 
         return None
 
+    def flush_and_capture(self, num_grabs: int = 5) -> Optional[np.ndarray]:
+        """Flush camera buffer and capture fresh frame."""
+        if self._cap and self._cap.isOpened():
+            for _ in range(max(1, num_grabs)):
+                self._cap.grab()
+            ret, frame = self._cap.read()
+            if ret and frame is not None and frame.size > 0:
+                return frame
+        return self.capture_image()
+
     def close(self) -> None:
         if self._cap:
             try:
@@ -251,6 +261,18 @@ class PiCameraDevice(CameraDevice):
                 return self.capture_image()
 
         return self.capture_image()
+
+    def flush_and_capture(self, num_grabs: int = 5) -> Optional[np.ndarray]:
+        """Flush stale camera hardware frames and capture an instantaneous fresh frame."""
+        if not self._is_active:
+            raise CameraNotConnectedError(self.init_error or "Camera not connected")
+        if self._cap and self._cap.isOpened():
+            for _ in range(max(1, num_grabs)):
+                self._cap.grab()
+            ret, frame = self._cap.read()
+            if ret and frame is not None and frame.size > 0:
+                return frame
+        return self.capture_still()
 
     def close(self) -> None:
         """Safely release camera hardware."""

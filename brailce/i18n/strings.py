@@ -295,8 +295,8 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "fil": "Sinusuri ang pahina ng Braille.",
     },
     "SCANNER_NO_BRAILLE": {
-        "en": "No Braille detected. Adjust the camera position.",
-        "fil": "Walang nakitang Braille. Ayusin ang posisyon ng kamera.",
+        "en": "No Braille detected.",
+        "fil": "Walang mabasang Braille.",
     },
     "SCANNER_BLURRY": {
         "en": "Image is blurry. Adjust distance or focus.",
