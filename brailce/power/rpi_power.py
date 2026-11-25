@@ -90,6 +90,45 @@ class PiPowerMonitor(PowerMonitor):
             except Exception as e:
                 logger.debug("INA219 read error: %s", e)
 
+        # 1b. Read from MAX17040 / MAX17048 fuel gauge (Geekworm X1203 UPS at 0x36)
+        if self._ups_type == "max17048" and self._bus:
+            try:
+                v_raw = self._bus.read_word_data(self._ups_addr, 0x02)
+                v_swap = ((v_raw << 8) & 0xFF00) | ((v_raw >> 8) & 0x00FF)
+                volts = v_swap * 1.25 / 1000.0 / 16.0
+
+                soc_raw = self._bus.read_word_data(self._ups_addr, 0x04)
+                soc_swap = ((soc_raw << 8) & 0xFF00) | ((soc_raw >> 8) & 0x00FF)
+                pct = max(0, min(100, int(round(soc_swap / 256.0))))
+
+                # Geekworm X1203 Power Loss Detection (PLD) on GPIO 6 (1=AC present, 0=battery)
+                plugged = False
+                try:
+                    import lgpio
+                    for chip in (0, 4):
+                        try:
+                            h = lgpio.gpiochip_open(chip)
+                            try:
+                                val = lgpio.gpio_read(h, 6)
+                                plugged = bool(val == 1)
+                                break
+                            finally:
+                                lgpio.gpiochip_close(h)
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+
+                charging = plugged and pct < 99
+                return PowerStatus(
+                    percentage=pct,
+                    is_charging=charging,
+                    is_plugged_in=plugged,
+                    status_text=f"UPS X1203: {pct}% ({volts:.2f}V)",
+                )
+            except Exception as e:
+                logger.debug("MAX17040/17048 read error: %s", e)
+
         # 2. Read from Linux power_supply sysfs if present
         import os
         try:

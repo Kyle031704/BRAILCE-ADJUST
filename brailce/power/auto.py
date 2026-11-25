@@ -17,19 +17,21 @@ from __future__ import annotations
 from typing import Optional
 
 from brailce.power.base import PowerMonitor, PowerStatus
+from brailce.power.rpi_power import PiPowerMonitor
 from brailce.power.simulated import SimulatedPowerMonitor
 from brailce.power.sysfs import SysfsPowerMonitor
 
 
 class AutoPowerMonitor(PowerMonitor):
     """
-    Chooses sysfs when a real capacity source exists, otherwise the
-    existing simulated monitor. Re-probes on every get_status() so a
-    supply that appears/disappears at runtime is picked up.
+    Chooses sysfs when a real capacity source exists, then an I2C UPS HAT
+    (such as Geekworm X1203 MAX17040 at 0x36 or INA219), otherwise the
+    existing simulated monitor.
     """
 
     def __init__(self, base_path: Optional[str] = None) -> None:
         self._sysfs = SysfsPowerMonitor(base_path)
+        self._rpi = PiPowerMonitor()
         self._simulated = SimulatedPowerMonitor()
         self._active: Optional[str] = None
 
@@ -42,6 +44,9 @@ class AutoPowerMonitor(PowerMonitor):
         if self._sysfs.has_capacity_source():
             self._active = "sysfs"
             return self._sysfs
+        if getattr(self._rpi, "_ups_type", None) is not None:
+            self._active = self._rpi._ups_type
+            return self._rpi
         self._active = "simulated"
         return self._simulated
 
