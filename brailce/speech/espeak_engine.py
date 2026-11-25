@@ -19,7 +19,7 @@ import sys
 import threading
 from typing import Optional
 
-from brailce.speech.audio_device import AudioDeviceCoordinator
+from brailce.speech.audio_device import AudioDeviceCoordinator, _find_best_alsa_device
 from brailce.speech.base import SpeechEngine
 from brailce.speech.normalizer import normalize_for_espeak_character, is_keystroke_feedback
 
@@ -356,10 +356,12 @@ class EspeakEngine(SpeechEngine):
                         else:
                             full_wav = wav_data
 
-                        # Pipe to aplay for playback
+                        # Pipe to aplay for playback (target best DAC card directly so HDMI card 0 never eats English speech)
+                        best_dev = _find_best_alsa_device()
+                        aplay_cmd = ["aplay", "-D", best_dev, "-q"] if best_dev else ["aplay", "-q"]
                         with self._lock:
                             aplay_proc = subprocess.Popen(
-                                ["aplay", "-q"],
+                                aplay_cmd,
                                 stdin=subprocess.PIPE,
                                 stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL,
