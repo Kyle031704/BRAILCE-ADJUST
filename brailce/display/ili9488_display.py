@@ -176,12 +176,18 @@ class ILI9488Display(DisplayDevice):
                     if hasattr(devices, driver_mod):
                         driver_cls = getattr(devices, driver_mod)
                         gpio_backend = LgpioShim(chip=4)
+                        # Explicit 50ms hardware reset pulse so ILI9488 wakes reliably before SPI init
+                        gpio_backend.setup(self._gpio_rst, gpio_backend.OUT)
+                        gpio_backend.output(self._gpio_rst, gpio_backend.LOW)
+                        time.sleep(0.05)
+                        gpio_backend.output(self._gpio_rst, gpio_backend.HIGH)
+                        time.sleep(0.15)
                         serial = spi(
                             port=self._spi_port,
                             device=self._spi_device,
                             gpio_DC=self._gpio_dc,
                             gpio_RST=self._gpio_rst,
-                            bus_speed_hz=8000000,
+                            bus_speed_hz=4000000,
                             gpio=gpio_backend,
                         )
                         # ILI9488 natively requires landscape (480, 320) with rotate=0
