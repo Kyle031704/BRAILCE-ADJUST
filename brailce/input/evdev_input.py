@@ -211,6 +211,8 @@ class EvdevInputDevice(KeyboardInputDevice):
         self._name_match = name_match or None
         self._modifiers: Set[str] = set()
         self._held_keys: Set[str] = set()
+        self._last_space_time: float = 0.0
+        self._last_enter_time: float = 0.0
         self._devices: List[Any] = []
         self._thread: Optional[threading.Thread] = None
         self._tty_thread: Optional[threading.Thread] = None
@@ -351,13 +353,30 @@ class EvdevInputDevice(KeyboardInputDevice):
 
             if name is None:
                 return
-            # Simultaneous Space + Enter combo on standalone USB keypad -> Change Mode
-            if (name == "enter" and "space" in self._held_keys) or (
-                name == "space" and "enter" in self._held_keys
+            # Space + Enter combo on standalone USB keypad -> Change Mode
+            # Works whether both are held simultaneously OR tapped within 0.30s
+            # (handles keypads without 2-key rollover like Custom braille38).
+            now = time.time()
+            if name == "enter" and (
+                "space" in self._held_keys or (now - self._last_space_time) < 0.30
             ):
                 self._held_keys.add(name)
+                self._last_space_time = 0.0
+                self._last_enter_time = 0.0
                 self._dispatch_key_name("tab")
                 return
+            if name == "space" and (
+                "enter" in self._held_keys or (now - self._last_enter_time) < 0.30
+            ):
+                self._held_keys.add(name)
+                self._last_space_time = 0.0
+                self._last_enter_time = 0.0
+                self._dispatch_key_name("tab")
+                return
+            if name == "space":
+                self._last_space_time = now
+            elif name == "enter":
+                self._last_enter_time = now
             self._held_keys.add(name)
             if "shift" in self._modifiers and len(name) == 1 and not name.isalpha():
                 name = self.SHIFT_SYMBOLS.get(name, name)
