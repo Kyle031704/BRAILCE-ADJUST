@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Optional, Any
 
 from brailce.core.events import AppMode
