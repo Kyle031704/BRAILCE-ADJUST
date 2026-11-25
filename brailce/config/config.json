@@ -82,7 +82,7 @@
 
     "power": {
         "driver": "auto",
-        "poll_seconds": 30,
+        "poll_seconds": 5,
         "shutdown_gpio": null,
         "shutdown_hold_seconds": 2.0,
         "shutdown_pull_up": true,

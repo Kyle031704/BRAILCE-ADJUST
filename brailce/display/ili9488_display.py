@@ -354,24 +354,34 @@ class ILI9488Display(DisplayDevice):
         # 2. Center: Brand Logo
         self._draw.text((200, 14), "BRAILCE", font=self._font_title or None, fill=(255, 255, 255))
 
-        # 3. Right: Battery Indicator Widget
+        # 3. Right: Phone-style Real-Time Battery Indicator Widget
         pct, is_charging = self._get_battery_info()
-        batt_x, batt_y = 385, 15
-        batt_w, batt_h = 28, 14
+        batt_x, batt_y = 382, 15
+        batt_w, batt_h = 30, 15
 
-        # Battery body outline
-        batt_color = (16, 185, 129) if pct > 20 else (239, 68, 68)  # Green or Red
+        if is_charging:
+            batt_color = (56, 189, 248)   # Bright Sky Blue when charging
+        elif pct > 20:
+            batt_color = (16, 185, 129)   # Emerald Green
+        else:
+            batt_color = (239, 68, 68)    # Alert Red
+
+        # Battery body outline + positive terminal cap
         self._draw.rectangle([(batt_x, batt_y), (batt_x + batt_w, batt_y + batt_h)], outline=batt_color, width=1)
-        # Battery positive terminal cap
-        self._draw.rectangle([(batt_x + batt_w, batt_y + 4), (batt_x + batt_w + 3, batt_y + batt_h - 4)], fill=batt_color)
+        self._draw.rectangle([(batt_x + batt_w + 1, batt_y + 4), (batt_x + batt_w + 3, batt_y + batt_h - 4)], fill=batt_color)
 
-        # Fill level inside battery
-        fill_w = max(1, int((batt_w - 4) * (pct / 100.0)))
+        # Exact fill level inside battery
+        fill_w = max(2, int((batt_w - 4) * (pct / 100.0)))
         self._draw.rectangle([(batt_x + 2, batt_y + 2), (batt_x + 2 + fill_w, batt_y + batt_h - 2)], fill=batt_color)
 
-        # Percentage text
+        # Crisp lightning bolt overlay when charging
+        if is_charging and hasattr(self._draw, "line"):
+            bx, by = batt_x + batt_w // 2, batt_y + 2
+            self._draw.line([(bx + 2, by), (bx - 2, by + 5), (bx + 2, by + 5), (bx - 2, by + 11)], fill=(255, 255, 255), width=1)
+
+        # Exact percentage text (e.g. "87%" or "87%+")
         batt_label = f"{pct}%" if not is_charging else f"{pct}%+"
-        self._draw.text((batt_x + batt_w + 7, batt_y + 1), batt_label, font=self._font_small or None, fill=(226, 232, 240))
+        self._draw.text((batt_x + batt_w + 7, batt_y + 1), batt_label, font=self._font_small or None, fill=(248, 250, 252))
 
     # =========================================================================
     # Operating Modes Rendering
