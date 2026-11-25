@@ -210,6 +210,7 @@ class EvdevInputDevice(KeyboardInputDevice):
         super().__init__(mode_getter=mode_getter)
         self._name_match = name_match or None
         self._modifiers: Set[str] = set()
+        self._held_keys: Set[str] = set()
         self._devices: List[Any] = []
         self._thread: Optional[threading.Thread] = None
         self._tty_thread: Optional[threading.Thread] = None
@@ -333,20 +334,31 @@ class EvdevInputDevice(KeyboardInputDevice):
                     self._modifiers.discard(modifier)
                 return
 
-            if event.value != 1:  # ignore release (0) and auto-repeat (2)
+            name = self._key_table.get(event.code)
+            if event.value == 0:
+                if name is not None:
+                    self._held_keys.discard(name)
+                return
+            if event.value != 1:  # ignore auto-repeat (2)
                 return
 
             if "ctrl" in self._modifiers:
-                base = self._key_table.get(event.code)
-                if base in ("c", "q", "p"):  # c/q quit; p = safe shutdown
-                    self._dispatch_key_name("ctrl+" + base)
+                if name in ("c", "q", "p"):  # c/q quit; p = safe shutdown
+                    self._dispatch_key_name("ctrl+" + name)
                 return  # other ctrl combos intentionally ignored
             if "alt" in self._modifiers:
                 return  # alt combos intentionally ignored
 
-            name = self._key_table.get(event.code)
             if name is None:
                 return
+            # Simultaneous Space + Enter combo on standalone USB keypad -> Change Mode
+            if (name == "enter" and "space" in self._held_keys) or (
+                name == "space" and "enter" in self._held_keys
+            ):
+                self._held_keys.add(name)
+                self._dispatch_key_name("tab")
+                return
+            self._held_keys.add(name)
             if "shift" in self._modifiers and len(name) == 1 and not name.isalpha():
                 name = self.SHIFT_SYMBOLS.get(name, name)
             self._dispatch_key_name(name)
