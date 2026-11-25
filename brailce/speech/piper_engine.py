@@ -85,13 +85,18 @@ def _find_piper_binary() -> Optional[str]:
     if found:
         return found
 
+    import glob
     home = os.path.expanduser("~")
     candidates = [
         os.path.join(home, "piper", "piper", "piper"),
         os.path.join(home, "piper", "piper"),
+        "/home/raspberrypi-5/piper/piper/piper",
+        "/home/raspberrypi-5/piper/piper",
         "/usr/local/bin/piper",
         "/usr/bin/piper",
     ]
+    candidates.extend(glob.glob("/home/*/piper/piper/piper"))
+    candidates.extend(glob.glob("/home/*/piper/piper"))
     for c in candidates:
         if os.path.isfile(c) and os.access(c, os.X_OK):
             return c
@@ -100,13 +105,17 @@ def _find_piper_binary() -> Optional[str]:
 
 def _find_piper_model() -> Optional[str]:
     """Locate the preferred Piper ONNX voice model."""
+    import glob
     home = os.path.expanduser("~")
     search_dirs = [
         os.path.join(home, "piper"),
         os.path.join(home, "piper", "piper"),
         os.path.join(home, ".local", "share", "piper"),
+        "/home/raspberrypi-5/piper",
+        "/home/raspberrypi-5/piper/piper",
         "/usr/local/share/piper",
     ]
+    search_dirs.extend(glob.glob("/home/*/piper"))
     preferred_names = [
         "en_US-lessac-medium.onnx",
         "en_US-amy-medium.onnx",

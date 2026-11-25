@@ -50,19 +50,19 @@ fi
 sudo ln -sf "$PIPER_BIN" /usr/local/bin/piper 2>/dev/null || true
 sudo chmod +x /usr/local/bin/piper 2>/dev/null || true
 
-# 4. Download Ryan Neural Voice Model with visible progress bar
-echo -e "${YELLOW}[4/5] Downloading Studio Voice Model: en_US-ryan-medium (~63 MB)...${NC}"
-MODEL_ONNX="$HOME/piper/en_US-ryan-medium.onnx"
-MODEL_JSON="$HOME/piper/en_US-ryan-medium.onnx.json"
+# 4. Download Amy Female Neural Voice Model with visible progress bar
+echo -e "${YELLOW}[4/5] Downloading Female Studio Voice Model: en_US-amy-medium (~63 MB)...${NC}"
+MODEL_ONNX="$HOME/piper/en_US-amy-medium.onnx"
+MODEL_JSON="$HOME/piper/en_US-amy-medium.onnx.json"
 
 if [ ! -f "$MODEL_ONNX" ] || [ $(wc -c < "$MODEL_ONNX" 2>/dev/null || echo 0) -lt 50000000 ]; then
-    echo "Downloading Ryan voice model (.onnx)..."
-    curl -L --progress-bar -o "$MODEL_ONNX" "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx"
-    echo "Downloading Ryan voice configuration (.json)..."
-    curl -L --progress-bar -o "$MODEL_JSON" "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json"
-    echo -e "${GREEN}✓ Voice model downloaded successfully!${NC}"
+    echo "Downloading Amy (female) voice model (.onnx)..."
+    curl -L --progress-bar -o "$MODEL_ONNX" "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx"
+    echo "Downloading Amy voice configuration (.json)..."
+    curl -L --progress-bar -o "$MODEL_JSON" "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json"
+    echo -e "${GREEN}✓ Female voice model (en_US-amy-medium) downloaded successfully!${NC}"
 else
-    echo -e "${GREEN}✓ Voice model already present and verified (>50MB).${NC}"
+    echo -e "${GREEN}✓ Female voice model already present and verified (>50MB).${NC}"
 fi
 
 # 5. Live Voice Test
