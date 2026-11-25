@@ -551,8 +551,15 @@ class BrailceApp:
         require_backspace = bool(
             self.config.get("power", "shutdown_requires_backspace", default=False)
         )
+        trigger_mode = str(
+            self.config.get("power", "shutdown_trigger", default="hold")
+        ).lower()
         self.shutdown_button = ShutdownButton(
-            pin=pin, hold_seconds=hold_seconds, pull_up=pull_up, require_backspace=require_backspace
+            pin=pin,
+            hold_seconds=hold_seconds,
+            pull_up=pull_up,
+            require_backspace=require_backspace,
+            trigger_mode=trigger_mode,
         )
         self.shutdown_button.register_callback(self._on_input_event)
         self.shutdown_button.start()

@@ -54,12 +54,14 @@ class ShutdownButton(InputDevice):
         hold_seconds: float = 2.0,
         pull_up: bool = True,
         require_backspace: bool = False,
+        trigger_mode: str = "hold",
     ) -> None:
         super().__init__()
         self._pin = int(pin)
         self._hold_seconds = max(0.1, float(hold_seconds))
         self._pull_up = bool(pull_up)
         self._require_backspace = bool(require_backspace)
+        self._trigger_mode = str(trigger_mode or "hold").lower()
         self._button: Optional[Any] = None
         self._running = False
 
@@ -98,15 +100,25 @@ class ShutdownButton(InputDevice):
                 bounce_time=0.05,
                 hold_time=self._hold_seconds,
             )
-            self._button.when_pressed = self._on_pressed
-            self._button.when_held = self._on_held
-            logger.info(
-                "GPIO shutdown button armed on BCM pin %d (hold %.1f s, pull_up=%s, require_backspace=%s).",
-                self._pin,
-                self._hold_seconds,
-                self._pull_up,
-                self._require_backspace,
-            )
+            if self._trigger_mode == "release":
+                # Latching switch (Normally Open): latched closed while ON,
+                # fires safe shutdown immediately when released/unlatched.
+                self._button.when_released = self._on_released
+                logger.info(
+                    "GPIO shutdown latching switch armed on BCM pin %d (trigger=release, pull_up=%s).",
+                    self._pin,
+                    self._pull_up,
+                )
+            else:
+                self._button.when_pressed = self._on_pressed
+                self._button.when_held = self._on_held
+                logger.info(
+                    "GPIO shutdown button armed on BCM pin %d (hold %.1f s, pull_up=%s, require_backspace=%s).",
+                    self._pin,
+                    self._hold_seconds,
+                    self._pull_up,
+                    self._require_backspace,
+                )
         except Exception as exc:
             # e.g. no pin factory / not a Pi: keep the service running
             logger.info(
@@ -133,6 +145,16 @@ class ShutdownButton(InputDevice):
             return
         logger.debug("GPIO power button pressed on pin %d", self._pin)
         self._emit_event(control_event(EventType.POWER_BUTTON_PRESSED, self.SOURCE_NAME))
+
+    def _on_released(self) -> None:
+        """gpiozero release callback: latching switch opened -> SHUTDOWN_PRESSED."""
+        if not self._running:
+            return
+        logger.info(
+            "GPIO latching power switch released on pin %d - emitting SHUTDOWN_PRESSED.",
+            self._pin,
+        )
+        self._emit_event(control_event(EventType.SHUTDOWN_PRESSED, self.SOURCE_NAME))
 
     def _on_held(self) -> None:
         """gpiozero hold callback: route SHUTDOWN_PRESSED on long press."""

@@ -86,7 +86,8 @@
         "shutdown_gpio": null,
         "shutdown_hold_seconds": 2.0,
         "shutdown_pull_up": true,
-        "shutdown_requires_backspace": false
+        "shutdown_requires_backspace": false,
+        "shutdown_trigger": "release"
     },
     
     "vision": {

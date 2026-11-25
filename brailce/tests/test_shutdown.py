@@ -542,3 +542,34 @@ class TestBackspacePowerCombo:
         app._on_input_event(control_event(EventType.BACKSPACE_PRESSED, "test"))
         assert calls == ["shutdown"]
 
+
+class TestLatchingPowerSwitch:
+    """Latching NO switch: stays ON while closed, releases -> safe shutdown."""
+
+    def test_release_mode_arms_when_released_not_when_held(self, fake_gpiozero) -> None:
+        btn = ShutdownButton(pin=17, pull_up=True, trigger_mode="release")
+        received = _collect(btn)
+        btn.start()
+        (button,) = fake_gpiozero.instances
+        assert button.when_released is not None
+        assert getattr(button, "when_held", None) is None
+
+        button.when_released()
+        assert [e.event_type for e in received] == [EventType.SHUTDOWN_PRESSED]
+
+    def test_release_mode_triggers_bilingual_shutdown_in_app(self, fake_gpiozero) -> None:
+        config = ConfigLoader({"power": {"shutdown_gpio": 17, "shutdown_trigger": "release"}})
+        app = BrailceApp(config)
+        app.state.language = "fil"
+        app.speech = MagicMock()
+        app.display = MagicMock()
+        app._setup_shutdown_button()
+        (button,) = fake_gpiozero.instances
+        with patch("brailce.core.app.subprocess") as mock_sub:
+            button.when_released()
+        app.speech.speak_text.assert_called_once_with(
+            get_string("SHUTDOWN_ANNOUNCE", "fil"), interrupt=False
+        )
+        mock_sub.run.assert_called_once()
+
+

@@ -168,6 +168,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # Internal pull-up: wire the button between the pin and GND
         "shutdown_pull_up": True,
         "shutdown_requires_backspace": False,
+        # "hold" (2s long press on momentary button) or "release" (latching NO switch unlatched)
+        "shutdown_trigger": "hold",
     },
 
     # ---- Vision ----
