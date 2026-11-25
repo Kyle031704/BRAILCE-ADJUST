@@ -107,6 +107,7 @@ class KeyboardInputDevice(InputDevice):
         self._thread: Optional[threading.Thread] = None
         self._last_space_time: float = 0.0
         self._last_backspace_time: float = 0.0
+        self._last_enter_time: float = 0.0
 
     @property
     def device_name(self) -> str:
@@ -235,7 +236,14 @@ class KeyboardInputDevice(InputDevice):
                 self._emit_event(control_event(EventType.MODE_PRESSED, self.SOURCE_NAME))
             elif ch in ("`", "~"):  # Backtick / Tilde -> Toggle Language ([EN] <-> [FIL])
                 self._emit_event(control_event(EventType.LANGUAGE_TOGGLE, self.SOURCE_NAME))
-            elif ch in ("\r", "\n"):  # ENTER / Confirm
+            elif ch in ("\r", "\n"):  # ENTER / Confirm (or Space + Enter -> Change Mode)
+                now = time.time()
+                if now - self._last_space_time < 0.35:
+                    self._last_enter_time = 0.0
+                    self._last_space_time = 0.0
+                    self._emit_event(control_event(EventType.MODE_PRESSED, self.SOURCE_NAME))
+                    return
+                self._last_enter_time = now
                 self._emit_event(control_event(EventType.ENTER_PRESSED, self.SOURCE_NAME))
             elif ch in ("\x7f", "\x08", "\b"):  # Backspace
                 now = time.time()
@@ -252,6 +260,11 @@ class KeyboardInputDevice(InputDevice):
                     self._last_backspace_time = 0.0
                     self._last_space_time = 0.0
                     self._emit_event(control_event(EventType.LANGUAGE_TOGGLE, self.SOURCE_NAME))
+                    return
+                if now - self._last_enter_time < 0.35:
+                    self._last_enter_time = 0.0
+                    self._last_space_time = 0.0
+                    self._emit_event(control_event(EventType.MODE_PRESSED, self.SOURCE_NAME))
                     return
                 self._last_space_time = now
                 self._emit_event(control_event(EventType.SPACE_PRESSED, self.SOURCE_NAME))
@@ -328,6 +341,11 @@ class KeyboardInputDevice(InputDevice):
                 self._last_space_time = 0.0
                 self._emit_event(control_event(EventType.LANGUAGE_TOGGLE, self.SOURCE_NAME))
                 return
+            if now - self._last_enter_time < 0.35:
+                self._last_enter_time = 0.0
+                self._last_space_time = 0.0
+                self._emit_event(control_event(EventType.MODE_PRESSED, self.SOURCE_NAME))
+                return
             self._last_space_time = now
             self._emit_event(
                 control_event(EventType.SPACE_PRESSED, self.SOURCE_NAME)
@@ -348,6 +366,13 @@ class KeyboardInputDevice(InputDevice):
             return
 
         if key_name.lower() == "enter":
+            now = time.time()
+            if now - self._last_space_time < 0.35:
+                self._last_enter_time = 0.0
+                self._last_space_time = 0.0
+                self._emit_event(control_event(EventType.MODE_PRESSED, self.SOURCE_NAME))
+                return
+            self._last_enter_time = now
             self._emit_event(
                 control_event(EventType.ENTER_PRESSED, self.SOURCE_NAME)
             )
