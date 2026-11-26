@@ -303,6 +303,18 @@ class TestModifierTracking:
         dev._process_evdev_event(_press(FAKE_ECODES.KEY_GRAVE))
         assert [e.event_type for e in collector] == [EventType.LANGUAGE_TOGGLE]
 
+    def test_space_then_enter_quickly_changes_mode(self, dev, collector, fake_evdev) -> None:
+        dev._process_evdev_event(_press(FAKE_ECODES.KEY_SPACE))
+        dev._process_evdev_event(_press(FAKE_ECODES.KEY_ENTER))
+        assert [e.event_type for e in collector] == [EventType.SPACE_PRESSED, EventType.MODE_PRESSED]
+
+    def test_lost_space_release_does_not_turn_later_enter_into_mode_change(self, dev, collector, fake_evdev) -> None:
+        """braille38 has no 2-key rollover: a Space key-up can be lost. A later Enter must stay Enter."""
+        dev._process_evdev_event(_press(FAKE_ECODES.KEY_SPACE))  # no key-up follows
+        dev._last_space_time -= 2.0  # Enter comes 2 s later (e.g. Scan in Scanner Mode)
+        dev._process_evdev_event(_press(FAKE_ECODES.KEY_ENTER))
+        assert [e.event_type for e in collector] == [EventType.SPACE_PRESSED, EventType.ENTER_PRESSED]
+
     def test_alt_combo_ignored(self, dev, collector, fake_evdev) -> None:
         dev._process_evdev_event(_press(FAKE_ECODES.KEY_LEFTALT))
         dev._process_evdev_event(_press(FAKE_ECODES.KEY_A))

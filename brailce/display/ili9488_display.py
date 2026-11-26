@@ -520,7 +520,7 @@ class ILI9488Display(DisplayDevice):
 
         # Cursor
         if text:
-            cx = min(440, 25 + len(lines[-1]) * 8)
+            cx = min(440, 25 + len(lines[-1]) * 8) if lines else 25  # all-space buffer wraps to []
             self._draw.rectangle([(cx, y - 18), (cx + 5, y - 4)], fill=(251, 191, 36))
 
         if not is_scanner:  # the Space/Enter hint belongs to Free Input, not to scanned text
@@ -553,7 +553,7 @@ class ILI9488Display(DisplayDevice):
             for line in lines[:3]:
                 self._draw.text((25, y), line, fill=(255, 255, 255))
                 y += 22
-            cx = min(440, 25 + len(lines[-1]) * 8)
+            cx = min(440, 25 + len(lines[-1]) * 8) if lines else 25  # all-space buffer wraps to []
             self._draw.rectangle([(cx, y - 20), (cx + 6, y - 4)], fill=(251, 191, 36))
         else:
             self._draw.text((25, 102), "Type your question on the Braille keypad...", fill=(100, 116, 139))

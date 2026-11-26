@@ -373,3 +373,9 @@ class TestAIAssistantModeCallSites:
         app = mock_app()
         AIAssistantMode(app).handle_event(InputEvent(EventType.SPACE_PRESSED))
         app.display.show_character.assert_called_once_with("Space")
+
+
+def test_lcd_space_only_buffer_does_not_crash(lcd: ILI9488Display) -> None:
+    """Space as the first key gives an all-space buffer; textwrap returns [] (was IndexError)."""
+    lcd.show_text_buffer(" ")
+    lcd.show_ai_query_input("  ")

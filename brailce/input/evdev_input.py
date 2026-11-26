@@ -158,6 +158,7 @@ class EvdevInputDevice(KeyboardInputDevice):
 
     SOURCE_NAME = "evdev"
     RESCAN_SECONDS = 5.0  # hotplug re-enumeration when no keyboard found
+    COMBO_WINDOW_S = 0.30  # Space + Enter pressed within this window -> Change Mode
     SELECT_TIMEOUT = 1.0  # keep the loop responsive to stop()
 
     # evdev KEY_* suffix -> normalized app key name (shared vocabulary)
@@ -353,21 +354,19 @@ class EvdevInputDevice(KeyboardInputDevice):
 
             if name is None:
                 return
-            # Space + Enter combo on standalone USB keypad -> Change Mode
-            # Works whether both are held simultaneously OR tapped within 0.30s
-            # (handles keypads without 2-key rollover like Custom braille38).
+            # Space + Enter combo on standalone USB keypad -> Change Mode.
+            # Decided by press TIMING only (both pressed within 0.30s). The old
+            # "still held" check misfired on keypads without 2-key rollover (Custom
+            # braille38): a lost Space key-up left Space "held" forever, so the next
+            # Enter (e.g. Scan in Scanner Mode) jumped to the next mode (Free Input).
             now = time.time()
-            if name == "enter" and (
-                "space" in self._held_keys or (now - self._last_space_time) < 0.30
-            ):
+            if name == "enter" and (now - self._last_space_time) < self.COMBO_WINDOW_S:
                 self._held_keys.add(name)
                 self._last_space_time = 0.0
                 self._last_enter_time = 0.0
                 self._dispatch_key_name("tab")
                 return
-            if name == "space" and (
-                "enter" in self._held_keys or (now - self._last_enter_time) < 0.30
-            ):
+            if name == "space" and (now - self._last_enter_time) < self.COMBO_WINDOW_S:
                 self._held_keys.add(name)
                 self._last_space_time = 0.0
                 self._last_enter_time = 0.0
