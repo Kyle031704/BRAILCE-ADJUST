@@ -150,6 +150,9 @@ class FakeDraw:
     def line(self, *args, **kwargs) -> None:
         pass
 
+    def ellipse(self, *args, **kwargs) -> None:
+        pass
+
     def text(self, pos, s, **kwargs) -> None:
         self.texts.append(s)
 
@@ -215,6 +218,19 @@ class TestILI9488TypedContentLowercase:
         # Mode pill + card headers stay uppercase; only the typed buffer is lowered.
         assert "ACCUMULATED SENTENCE BUFFER:" in lcd._draw.texts
         assert "ACTIVE CHARACTER:" not in lcd._draw.texts  # drawn by show_character, not here
+
+    def test_scanner_buffer_has_scanner_label_and_no_free_input_hint(self, lcd: ILI9488Display) -> None:
+        lcd._current_mode = AppMode.SCANNER
+        lcd._last_status_msg = None
+        lcd.show_text_buffer("LUPA")
+        assert "SCANNED TEXT:" in lcd._draw.texts
+        assert "ACCUMULATED SENTENCE BUFFER:" not in lcd._draw.texts
+        assert lcd._last_status_msg is None  # no "Letters: N | Press Space..." hint in Scanner
+
+    def test_braille_dots_label_not_doubled(self, lcd: ILI9488Display) -> None:
+        lcd.show_braille("V", "Dots 1-2-3-6", "")
+        assert "Dots: 1-2-3-6" in lcd._draw.texts
+        assert not any("Dots: Dots" in t for t in lcd._draw.texts)
 
 
 class TestILI9488BatteryIndicator:

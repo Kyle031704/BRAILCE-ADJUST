@@ -1185,6 +1185,8 @@ class OBREngine:
                     "dots_str": dots_str,
                     "word_index": word_idx,
                     "line_index": line_idx,
+                    "x": ux,
+                    "y": uy,
                 })
 
             clean_l = " ".join(line_str.split()).strip()
@@ -1494,6 +1496,69 @@ class OBREngine:
     )
 
     @staticmethod
+    def _keep_center_line(res: Dict[str, Any], frame_h: int) -> Dict[str, Any]:
+        """
+        The user aims ONE line into the center box. When a read spans several lines
+        (full-frame fallback, or a tall box catching a neighbour), keep only the readable
+        line closest to the frame's vertical center and drop the rest, so lines above and
+        below the box are never read out. Set BRAILCE_SCAN_ALL_LINES=1 to read every line.
+        """
+        if os.environ.get("BRAILCE_SCAN_ALL_LINES", "") == "1":
+            return res
+        if not res or not res.get("readable"):
+            return res
+        cells = list(res.get("cells") or [])
+        lines: Dict[Any, List[Dict[str, Any]]] = {}
+        for c in cells:
+            if "y" not in c and c.get("kind") != "indicator":
+                return res  # no positions (YOLO path): leave untouched
+            lines.setdefault(c.get("line_index", 0), []).append(c)
+        if len(lines) <= 1:
+            return res
+
+        def _line_text(line_cells: List[Dict[str, Any]]) -> str:
+            out: List[str] = []
+            prev_w = None
+            for c in line_cells:
+                if c.get("kind") == "indicator":
+                    continue
+                w = c.get("word_index", 0)
+                if prev_w is not None and w != prev_w:
+                    out.append(" ")
+                out.append(str(c.get("char", "")))
+                prev_w = w
+            return " ".join("".join(out).split())
+
+        center = 0.5 * float(frame_h)
+        best_key, best_dist, best_text = None, None, ""
+        for key, lc in lines.items():
+            text = _line_text(lc)
+            chars = [ch for ch in text if not ch.isspace()]
+            if not chars or not any(ch.isalnum() for ch in chars):
+                continue
+            if sum(1 for ch in chars if ch == UNKNOWN_CELL_CHAR) / len(chars) > 0.30:
+                continue
+            ys = sorted(float(c["y"]) for c in lc if "y" in c)
+            if not ys:
+                continue
+            dist = abs(ys[len(ys) // 2] - center)
+            if best_dist is None or dist < best_dist:
+                best_key, best_dist, best_text = key, dist, text
+        if best_key is None:
+            return res
+
+        keep = lines[best_key]
+        pts = [(float(c["x"]), float(c["y"])) for c in keep if "y" in c]
+        res["all_lines_text"] = res.get("text", "")
+        res["cells"] = keep
+        res["boxes"] = [b for b in (res.get("boxes") or [])
+                        if any(abs(float(b["x"]) - x) < 1.0 and abs(float(b["y"]) - y) < 1.0 for x, y in pts)]
+        res["text"] = best_text
+        res["words"] = [t for t in best_text.split() if t]
+        res["center_line_only"] = True
+        return res
+
+    @staticmethod
     def _is_clean(res: Optional[Dict[str, Any]]) -> bool:
         if not res or not res.get("readable"):
             return False
@@ -1533,6 +1598,7 @@ class OBREngine:
                 hist = self._deferred_history[-1] if self._deferred_history else None
                 self._deferred_history = None
             res["strategy"] = {"full_frame": full, "embossed_only": kind == "embossed", "detector": kind}
+            res = self._keep_center_line(res, image.shape[0])
             score = self._score_result(res)
             if score < 0:
                 if first_fail is None or (first_fail.get("reason") == "no_braille" and res.get("reason") != "no_braille"):
@@ -1802,6 +1868,10 @@ class OBREngine:
                     (0, 255, 0) if readable else (0, 0, 255), 2)
         self._record_history(dbg, readable, text, "ok" if readable else "no_braille")
 
+        for c in (res.get("cells", []) if readable else []):
+            if "y" in c:
+                c["x"] += x0
+                c["y"] += y0
         for q in dots:
             q["x"] += x0
             q["y"] += y0
@@ -2153,6 +2223,10 @@ p.sub {{ text-align: center; color: #aaa; margin-bottom: 24px; }}
             for b in boxes:
                 b["x"] += x0
                 b["y"] += y0
+            for c in cells:
+                if "y" in c:
+                    c["x"] += x0
+                    c["y"] += y0
             for d in dots:
                 d["x"] += x0
                 d["y"] += y0

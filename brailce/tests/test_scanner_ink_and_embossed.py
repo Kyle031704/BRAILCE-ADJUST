@@ -115,11 +115,23 @@ def test_real_printed_ink_chart(engine, box, expected):
 
 
 @pytest.mark.skipif(not os.path.isfile(os.path.join(ROOT, "123.webp")), reason="sample chart missing")
-def test_real_printed_ink_chart_whole_page(engine):
-    """Whole chart: crisp boxes/labels must not trip the noise gate; label rows must be ignored."""
+def test_real_printed_ink_chart_whole_page(engine, monkeypatch):
+    """Whole chart (all-lines mode): crisp boxes/labels must not trip the noise gate; label rows must be ignored."""
+    monkeypatch.setenv("BRAILCE_SCAN_ALL_LINES", "1")
     img = cv2.imread(os.path.join(ROOT, "123.webp"))
     res = engine.scan_frame(img)
     assert res.get("text", "").split() == ["ABCDEFGHIJ", "KLMNOPQRST", "UVWXYZ"]
+
+
+@pytest.mark.skipif(not os.path.isfile(os.path.join(ROOT, "123.webp")), reason="sample chart missing")
+def test_scan_reads_only_center_line(engine, monkeypatch):
+    """Default scanner reads only the line in the center box, never the lines above/below it."""
+    monkeypatch.delenv("BRAILCE_SCAN_ALL_LINES", raising=False)
+    img = cv2.imread(os.path.join(ROOT, "123.webp"))
+    res = engine.scan_frame(img)
+    assert res.get("text", "").split() == ["KLMNOPQRST"]
+    assert {c.get("line_index") for c in res.get("cells", [])} == {res["cells"][0]["line_index"]}
+    assert all(b.get("label") in "KLMNOPQRST" for b in res.get("boxes", []))
 
 
 # Real webcam frames from the device (EMEET C60E, side-lit embossed sheet with handwritten

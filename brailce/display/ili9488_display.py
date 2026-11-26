@@ -471,7 +471,8 @@ class ILI9488Display(DisplayDevice):
         # Braille cell card (Top Right)
         self._draw.rectangle([(205, 56), (465, 175)], fill=(15, 23, 42), outline=(16, 185, 129), width=1)
         self._draw.text((215, 68), f"BRAILLE: {unicode_char}", fill=(255, 255, 255))
-        self._draw.text((215, 96), f"Dots: {dots_string[:20]}", fill=(148, 163, 184))
+        dots_label = dots_string[5:] if dots_string.startswith("Dots ") else dots_string  # scanner passes "Dots 1-2-3"
+        self._draw.text((215, 96), f"Dots: {dots_label[:20]}", fill=(148, 163, 184))
 
         # Render 6-dot matrix cell (2x3)
         cell_x, cell_y = 400, 78
@@ -504,7 +505,9 @@ class ILI9488Display(DisplayDevice):
         import textwrap
         # Buffer card (Bottom)
         self._draw.rectangle([(15, 185), (465, 276)], fill=(15, 23, 42), outline=(51, 65, 85), width=1)
-        self._draw.text((25, 195), "ACCUMULATED SENTENCE BUFFER:", fill=(148, 163, 184))
+        is_scanner = self._current_mode == AppMode.SCANNER
+        label = "SCANNED TEXT:" if is_scanner else "ACCUMULATED SENTENCE BUFFER:"
+        self._draw.text((25, 195), label, fill=(148, 163, 184))
 
         # Typed content renders in lowercase at the display layer so every
         # mode benefits; the empty-state placeholder is a label and stays as-is.
@@ -520,7 +523,8 @@ class ILI9488Display(DisplayDevice):
             cx = min(440, 25 + len(lines[-1]) * 8)
             self._draw.rectangle([(cx, y - 18), (cx + 5, y - 4)], fill=(251, 191, 36))
 
-        self.show_status(get_string("FREE_INPUT_STATUS", self._language, count=len(text)))
+        if not is_scanner:  # the Space/Enter hint belongs to Free Input, not to scanned text
+            self.show_status(get_string("FREE_INPUT_STATUS", self._language, count=len(text)))
         self._flush_to_hardware()
 
     # -------------------------------------------------------------------------
