@@ -236,11 +236,14 @@ class ScannerMode(BaseMode):
                     dist_info = obr.assess_braille_distance(roi_frame, confidence_threshold=conf_threshold)
                     conf = dist_info.get("confidence", 0.0)
                     dot_count = dist_info.get("dot_count", 0)
-                    dot_pitch = dist_info.get("dot_pitch", 0.0)
-                    # Gate: dot_count >= 5 AND 8.0 <= dot_pitch <= 55.0 AND conf >= conf_threshold
-                    if dot_count >= 5 and (8.0 <= dot_pitch <= 55.0) and conf >= conf_threshold:
+                    state = dist_info.get("state", "no_braille")
+                    # Gate on presence only. The pitch range must NOT be gated here:
+                    # assess_braille_distance() reports pitch < 8 as "too_far" and pitch > 55
+                    # as "too_close", so gating on 8..55 made the move closer/farther
+                    # guidance unreachable for exactly the cases it exists for.
+                    if state != "no_braille" and dot_count >= 5 and conf >= conf_threshold:
                         detected = True
-                        distance_state = dist_info.get("state", "no_braille")
+                        distance_state = state
                     else:
                         distance_state = "no_braille"
                         detected = False
@@ -523,30 +526,7 @@ class ScannerMode(BaseMode):
                         self.app.speech.speak_text(msg, interrupt=True)
                 return
 
-            best_result = None
-            best_frame = None
-
-            for cand in candidates:
-                self._scanned_frame = cand
-                # Center-Strip ROI: process ROI window matching the LCD reticle while supporting multi-line clustering
-                res = self.app.obr.process_image(cand, full_frame=False)
-                if res.get("readable") and str(res.get("text", "")).strip():
-                    best_result = res
-                    best_frame = cand
-                    break
-
-                if best_result is None:
-                    best_result = res
-                    best_frame = cand
-
-            # Full-frame fallback if center-strip ROI did not yield readable text (e.g. card slightly off-center)
-            if not (best_result and best_result.get("readable") and str(best_result.get("text", "")).strip()):
-                for cand in candidates:
-                    res_full = self.app.obr.process_image(cand, full_frame=True)
-                    if res_full.get("readable") and str(res_full.get("text", "")).strip():
-                        best_result = res_full
-                        best_frame = cand
-                        break
+            best_result, best_frame = self._decode_candidates(candidates)
 
             self._scanned_frame = best_frame
             result = best_result or {"readable": False, "reason": "no_braille"}
@@ -576,10 +556,14 @@ class ScannerMode(BaseMode):
                 if speech:
                     if reason == "no_braille":
                         if lang == "fil":
-                            no_braille_wav = os.path.join("brailce", "audio", "filipino", "no_braille_fil.wav")
+                            # Resolve relative to the package, not the CWD (systemd/launcher CWD varies)
+                            no_braille_wav = str(
+                                Path(__file__).resolve().parent.parent / "audio" / "filipino" / "no_braille_fil.wav"
+                            )
+                            played = False
                             if os.path.isfile(no_braille_wav):
-                                AudioDeviceCoordinator.play_wav_file(no_braille_wav, owner="scanner", timeout=4.0)
-                            else:
+                                played = AudioDeviceCoordinator.play_wav_file(no_braille_wav, owner="scanner", timeout=4.0)
+                            if not played:
                                 speech.speak_text(msg, interrupt=True)
                         else:
                             speech.speak_text(msg, interrupt=True)
@@ -595,7 +579,6 @@ class ScannerMode(BaseMode):
             logger.exception("Scanner worker encountered error: %s", exc)
             print(f"Scanner result: readable=False error={exc}", flush=True)
         finally:
-            self._is_scanning = False
             # If scan was unreadable or failed: clear scan locks so preview + distance guidance resume
             if result is None or not result.get("readable") or not str(result.get("text", "")).strip():
                 self.scanned_text = None
@@ -604,9 +587,47 @@ class ScannerMode(BaseMode):
                 self._braille_detected = None
                 self._distance_state = "no_braille"
                 self._last_distance_announced_state = None
+            # Start readout BEFORE releasing the scanning flag: otherwise there is a window where
+            # neither _is_scanning nor _is_reading is set, so the detector can talk over the
+            # readout and a second Enter can launch an overlapping scan.
+            try:
+                if self._last_result is not None and not self._stop_readout_event.is_set():
+                    self._start_readout_thread(self._last_result)
+            finally:
+                self._is_scanning = False
 
-        if self._last_result is not None and not self._stop_readout_event.is_set():
-            self._start_readout_thread(self._last_result)
+    def _decode_candidates(self, candidates: List[Any]) -> Tuple[Optional[Dict[str, Any]], Optional[Any]]:
+        """
+        Run OBR on each candidate frame and keep the best result.
+
+        Uses OBREngine.scan_frame(), which handles BOTH ink-printed and embossed Braille.
+        (This used to hard-code embossed_only=True, which erases solid ink dots, so printed
+        Braille could never be read.)
+        """
+        obr = self.app.obr
+        best_result: Optional[Dict[str, Any]] = None
+        best_frame: Optional[Any] = None
+        best_score = -2.0
+        score_fn = getattr(type(obr), "_score_result", None)
+        for cand in candidates:
+            if self._stop_readout_event.is_set():
+                break
+            self._scanned_frame = cand
+            res = obr.scan_frame(cand) if hasattr(obr, "scan_frame") else None
+            if not isinstance(res, dict):
+                res = obr.process_image(cand, full_frame=False)
+                if not (res.get("readable") and str(res.get("text", "")).strip()):
+                    res = obr.process_image(cand, full_frame=True)
+            if callable(score_fn) and isinstance(score_fn(res), (int, float)):
+                score = float(score_fn(res))
+            else:
+                score = 1.0 if (res.get("readable") and str(res.get("text", "")).strip()) else -1.0
+            if best_result is None or score > best_score:
+                best_result, best_frame, best_score = res, cand, score
+            text = str(res.get("text", ""))
+            if score >= 0 and UNKNOWN_CELL_CHAR not in text:
+                break  # clean read: don't spend time on older buffered frames
+        return best_result, best_frame
 
     def _start_readout_thread(self, result: Dict[str, Any]) -> None:
         """Launch interruptible letter-by-letter + word-by-word readout."""

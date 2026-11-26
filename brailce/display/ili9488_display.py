@@ -306,6 +306,17 @@ class ILI9488Display(DisplayDevice):
                 pass
         return 100, True  # Default: 100% plugged directly into power supply
 
+    def _battery_known(self) -> bool:
+        """True only when a real battery reading exists (poller value or monitor percentage)."""
+        if self._battery_override is not None:
+            return True
+        if self._power_monitor:
+            try:
+                return self._power_monitor.get_status().percentage is not None
+            except Exception:
+                return False
+        return False
+
     def show_battery(self, percentage, charging: bool = False) -> None:
         """
         Refresh the header battery widget ("75%" / "75%+") with the value
@@ -358,6 +369,15 @@ class ILI9488Display(DisplayDevice):
         pct, is_charging = self._get_battery_info()
         batt_x, batt_y = 382, 15
         batt_w, batt_h = 30, 15
+
+        if not self._battery_known():
+            # No battery sensor readable (e.g. UPS board without I2C/sysfs fuel gauge):
+            # show "--" instead of a fabricated 100%.
+            grey = (100, 116, 139)
+            self._draw.rectangle([(batt_x, batt_y), (batt_x + batt_w, batt_y + batt_h)], outline=grey, width=1)
+            self._draw.rectangle([(batt_x + batt_w, batt_y + 4), (batt_x + batt_w + 3, batt_y + batt_h - 4)], fill=grey)
+            self._draw.text((batt_x + batt_w + 7, batt_y + 1), "--", font=self._font_small or None, fill=grey)
+            return
 
         if is_charging:
             batt_color = (56, 189, 248)   # Bright Sky Blue when charging

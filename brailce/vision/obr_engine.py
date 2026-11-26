@@ -24,7 +24,7 @@ import logging
 import math
 import os
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 try:
     import cv2
@@ -107,6 +107,11 @@ class OBREngine:
         self.use_yolo_secondary = use_yolo_secondary
         self._model = None
         self.detected_schema = "classical_dot_grid"
+        # When not None, process_image() appends debug frames here instead of writing them
+        # (scan_frame() tries several strategies and only saves the winner).
+        self._deferred_history: Optional[List[Tuple[Any, ...]]] = None
+        # (frame, shape, detect_shadow_dots_ex result) reused by process_shadow() within one scan_frame()
+        self._shadow_cache: Optional[Tuple[Any, Any, Any]] = None
 
     def _load_model(self) -> bool:
         """Load local YOLO weights only if use_yolo_secondary=True and weights exist locally."""
@@ -505,7 +510,34 @@ class OBREngine:
         return True, "ok", lap_var
 
     @staticmethod
-    def detect_dots(image: np.ndarray) -> Tuple[List[Dict[str, float]], float]:
+    def _nms_points(cands: List[Dict[str, float]], radius: float) -> List[Dict[str, float]]:
+        """Greedy NMS on score-sorted points using a spatial grid (O(n) instead of O(n^2))."""
+        kept: List[Dict[str, float]] = []
+        if not cands:
+            return kept
+        cell = max(1.0, float(radius))
+        grid: Dict[Tuple[int, int], List[Dict[str, float]]] = {}
+        r2 = radius * radius
+        for cand in cands:
+            gx, gy = int(cand["x"] // cell), int(cand["y"] // cell)
+            clash = False
+            for ix in (gx - 1, gx, gx + 1):
+                for iy in (gy - 1, gy, gy + 1):
+                    for ex in grid.get((ix, iy), ()):
+                        if (cand["x"] - ex["x"]) ** 2 + (cand["y"] - ex["y"]) ** 2 <= r2:
+                            clash = True
+                            break
+                    if clash:
+                        break
+                if clash:
+                    break
+            if not clash:
+                kept.append(cand)
+                grid.setdefault((gx, gy), []).append(cand)
+        return kept
+
+    @staticmethod
+    def detect_dots(image: np.ndarray, embossed_only: bool = False) -> Tuple[List[Dict[str, float]], float]:
         """
         Detect embossed or printed Braille dots across a wide scale range (4px to 20px)
         using multi-scale Difference of Gaussians (DoG). Robustly merges paired
@@ -518,6 +550,14 @@ class OBREngine:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image.copy()
         h, w = gray.shape[:2]
         gray_f = gray.astype(np.float32)
+
+        # Max blob size used to be relative to each axis, which on the slim center-strip ROI
+        # (22% of frame height ~158px) silently dropped every dot wider than ~13-19px, i.e.
+        # every close-up scan. Use max(h, w/2): unchanged for normal frames, but a wide thin
+        # strip is no longer penalised. (Using the full long side let merged 2-dot blobs in.)
+        ref = max(float(h), 0.5 * float(w))
+        max_blob_e = 0.08 * ref
+        max_blob = 0.12 * ref
 
         # 3-octave multi-scale Gaussian smoothing (covers 3px to 18px dot radius across wide distance range)
         g0 = cv2.GaussianBlur(gray_f, (0, 0), 1.0)
@@ -540,6 +580,151 @@ class OBREngine:
         # Robust thresholding: Braille dots typically occupy < 2% of the page
         p98_d = float(np.percentile(dark_resp, 98.0))
         p98_l = float(np.percentile(light_resp, 98.0))
+
+        if embossed_only:
+            # Erase handwritten/printed ink strokes first so DoG never rings on pencil/pen text
+            ksize = max(15, min(41, (min(h, w) // 5) | 1))
+            bg = cv2.medianBlur(gray, ksize).astype(np.float32)
+            ink_dark = ((bg - gray_f) > 15.0).astype(np.uint8) * 255
+            num_ink, labels_ink, stats_ink, _ = cv2.connectedComponentsWithStats(ink_dark, connectivity=8)
+            ink_mask = np.zeros_like(gray, dtype=np.uint8)
+            for i in range(1, num_ink):
+                area_i = float(stats_ink[i, cv2.CC_STAT_AREA])
+                bw_i = float(stats_ink[i, cv2.CC_STAT_WIDTH])
+                bh_i = float(stats_ink[i, cv2.CC_STAT_HEIGHT])
+                max_dim = max(bw_i, bh_i)
+                min_dim = max(1.0, min(bw_i, bh_i))
+                aspect_i = max_dim / min_dim
+                x0_i, y0_i = int(stats_ink[i, cv2.CC_STAT_LEFT]), int(stats_ink[i, cv2.CC_STAT_TOP])
+                pad = 6
+                ry1, ry2 = max(0, y0_i - pad), min(h, y0_i + int(bh_i) + pad)
+                rx1, rx2 = max(0, x0_i - pad), min(w, x0_i + int(bw_i) + pad)
+                patch_diff = gray_f[ry1:ry2, rx1:rx2] - bg[ry1:ry2, rx1:rx2]
+                bright_peak = float(np.max(patch_diff))
+                dark_depth = float(-np.min(patch_diff))
+                touches_edge = (y0_i <= 3) or (y0_i + int(bh_i) >= h - 3)
+                if (
+                    max_dim > 22.0
+                    or (aspect_i > 2.1 and max_dim > 12.0)
+                    or area_i > 250.0
+                    or (touches_edge and dark_depth > 18.0 and bright_peak < 10.0)
+                    or (dark_depth > 22.0 and bright_peak < max(6.0, dark_depth * 0.25))
+                ):
+                    ink_mask[labels_ink == i] = 255
+
+            clean_gray = gray_f.copy()
+            if np.any(ink_mask > 0):
+                ink_mask = cv2.dilate(ink_mask, np.ones((3, 3), np.uint8), iterations=1)
+                clean_gray[ink_mask > 0] = bg[ink_mask > 0]
+                g0 = cv2.GaussianBlur(clean_gray, (0, 0), 1.0)
+                g1 = cv2.GaussianBlur(clean_gray, (0, 0), 2.0)
+                g2 = cv2.GaussianBlur(clean_gray, (0, 0), 4.0)
+                g3 = cv2.GaussianBlur(clean_gray, (0, 0), 8.0)
+                dark_resp = np.maximum(np.maximum(np.clip(g1 - g0, 0.0, 255.0), np.clip(g2 - g1, 0.0, 255.0)), np.clip(g3 - g2, 0.0, 255.0))
+                light_resp = np.maximum(np.maximum(np.clip(g0 - g1, 0.0, 255.0), np.clip(g1 - g2, 0.0, 255.0)), np.clip(g2 - g3, 0.0, 255.0))
+                p98_d = float(np.percentile(dark_resp, 98.0))
+                p98_l = float(np.percentile(light_resp, 98.0))
+
+            thresh_d = max(2.2, p98_d * 0.34)
+            thresh_l = max(2.0, p98_l * 0.36)
+
+            # 1. Collect dark shadow blobs and light highlight blobs separately
+            dark_list: List[Dict[str, float]] = []
+            mask_d = (dark_resp >= thresh_d).astype(np.uint8)
+            num_d, _, stats_d, cents_d = cv2.connectedComponentsWithStats(mask_d, connectivity=8)
+            for lbl in range(1, num_d):
+                area = float(stats_d[lbl, cv2.CC_STAT_AREA])
+                bw = float(stats_d[lbl, cv2.CC_STAT_WIDTH])
+                bh = float(stats_d[lbl, cv2.CC_STAT_HEIGHT])
+                if area < 6.0 or bw < 2.0 or bh < 2.0 or bw > max_blob_e or bh > max_blob_e:
+                    continue
+                if min(bw, bh) / max(1e-6, max(bw, bh)) < 0.35:
+                    continue
+                cx, cy = float(cents_d[lbl][0]), float(cents_d[lbl][1])
+                diam = math.sqrt(4.0 * area / math.pi)
+                dark_list.append({"x": cx, "y": cy, "d": diam, "area": area, "score": float(dark_resp[int(cy), int(cx)])})
+
+            light_list: List[Dict[str, float]] = []
+            mask_l = (light_resp >= thresh_l).astype(np.uint8)
+            num_l, _, stats_l, cents_l = cv2.connectedComponentsWithStats(mask_l, connectivity=8)
+            for lbl in range(1, num_l):
+                area = float(stats_l[lbl, cv2.CC_STAT_AREA])
+                bw = float(stats_l[lbl, cv2.CC_STAT_WIDTH])
+                bh = float(stats_l[lbl, cv2.CC_STAT_HEIGHT])
+                if area < 6.0 or bw < 2.0 or bh < 2.0 or bw > max_blob_e or bh > max_blob_e:
+                    continue
+                if min(bw, bh) / max(1e-6, max(bw, bh)) < 0.35:
+                    continue
+                cx, cy = float(cents_l[lbl][0]), float(cents_l[lbl][1])
+                diam = math.sqrt(4.0 * area / math.pi)
+                light_list.append({"x": cx, "y": cy, "d": diam, "area": area, "score": float(light_resp[int(cy), int(cx)])})
+
+            # 2. Pair shadow + highlight of the SAME embossed dome to its true center
+            all_d_vals = [b["d"] for b in (dark_list + light_list)]
+            est_d0 = float(np.median(all_d_vals)) if all_d_vals else 8.0
+            pair_r = max(10.0, est_d0 * 1.55)
+
+            embossed_cands: List[Dict[str, float]] = []
+            used_l_idx = set()
+            for d_b in dark_list:
+                best_li = None
+                best_dist = float("inf")
+                for li, l_b in enumerate(light_list):
+                    if li in used_l_idx:
+                        continue
+                    dist = math.hypot(d_b["x"] - l_b["x"], d_b["y"] - l_b["y"])
+                    if dist <= pair_r and dist < best_dist:
+                        best_dist = dist
+                        best_li = li
+                if best_li is not None:
+                    l_b = light_list[best_li]
+                    used_l_idx.add(best_li)
+                    cx = (d_b["x"] + l_b["x"]) / 2.0
+                    cy = (d_b["y"] + l_b["y"]) / 2.0
+                    diam = (d_b["d"] + l_b["d"]) / 2.0
+                    area = max(d_b["area"], l_b["area"])
+                    score = d_b["score"] + l_b["score"]
+                else:
+                    cx, cy, diam, area, score = d_b["x"], d_b["y"], d_b["d"], d_b["area"], d_b["score"]
+
+                r_search = int(max(5, round(diam * 1.3)))
+                y1, y2 = max(0, int(cy) - r_search), min(h, int(cy) + r_search + 1)
+                x1, x2 = max(0, int(cx) - r_search), min(w, int(cx) + r_search + 1)
+                local_l_max = float(np.max(light_resp[y1:y2, x1:x2]))
+                bright_above_bg = float(np.max(clean_gray[y1:y2, x1:x2] - bg[y1:y2, x1:x2]))
+                dark_below_bg = float(np.max(bg[y1:y2, x1:x2] - clean_gray[y1:y2, x1:x2]))
+                # Reject flat handwriting edge artifacts (deep dark, weak highlight)
+                if local_l_max >= 1.2 and bright_above_bg >= max(1.8, dark_below_bg * 0.12):
+                    embossed_cands.append({"x": cx, "y": cy, "d": diam, "score": score, "area": area})
+
+            # 3. Include remaining unpaired light-dominant domes (e.g. top-lit dots with faint shadow)
+            for li, l_b in enumerate(light_list):
+                if li in used_l_idx:
+                    continue
+                cx, cy, diam, area, score = l_b["x"], l_b["y"], l_b["d"], l_b["area"], l_b["score"]
+                r_search = int(max(5, round(diam * 1.3)))
+                y1, y2 = max(0, int(cy) - r_search), min(h, int(cy) + r_search + 1)
+                x1, x2 = max(0, int(cx) - r_search), min(w, int(cx) + r_search + 1)
+                local_d_max = float(np.max(dark_resp[y1:y2, x1:x2]))
+                bright_above_bg = float(np.max(clean_gray[y1:y2, x1:x2] - bg[y1:y2, x1:x2]))
+                if local_d_max >= 1.0 and bright_above_bg >= 2.0:
+                    embossed_cands.append({"x": cx, "y": cy, "d": diam, "score": score + local_d_max, "area": area})
+
+            if not embossed_cands:
+                return [], 0.0
+            if len(embossed_cands) >= 4:
+                med_a = float(np.median([b["area"] for b in embossed_cands]))
+                embossed_cands = [b for b in embossed_cands if 0.35 * med_a <= b["area"] <= 2.6 * med_a]
+            if not embossed_cands:
+                return [], 0.0
+            est_d = float(np.median([b["d"] for b in embossed_cands]))
+            embossed_cands.sort(key=lambda d: d["score"], reverse=True)
+            # Ensure one dome never produces two dots (shadow + highlight are ~8-12px apart; real dots are ~22-30px apart)
+            suppress_r = max(8.0, est_d * 1.15)
+            final_dots_e = OBREngine._nms_points(embossed_cands, suppress_r)
+            final_d_e = float(np.median([d["d"] for d in final_dots_e])) if final_dots_e else 0.0
+            return final_dots_e, final_d_e
+
         thresh_d = max(4.0, p98_d * 0.42)
         thresh_l = max(4.0, p98_l * 0.42)
 
@@ -553,7 +738,7 @@ class OBREngine:
             area = float(stats_d[lbl, cv2.CC_STAT_AREA])
             bw = float(stats_d[lbl, cv2.CC_STAT_WIDTH])
             bh = float(stats_d[lbl, cv2.CC_STAT_HEIGHT])
-            if area < 3.0 or bw < 2.0 or bh < 2.0 or bw > (w * 0.12) or bh > (h * 0.12):
+            if area < 3.0 or bw < 2.0 or bh < 2.0 or bw > max_blob or bh > max_blob:
                 continue
             aspect = min(bw, bh) / max(1e-6, max(bw, bh))
             if aspect < 0.32:
@@ -570,7 +755,7 @@ class OBREngine:
             area = float(stats_l[lbl, cv2.CC_STAT_AREA])
             bw = float(stats_l[lbl, cv2.CC_STAT_WIDTH])
             bh = float(stats_l[lbl, cv2.CC_STAT_HEIGHT])
-            if area < 3.0 or bw < 2.0 or bh < 2.0 or bw > (w * 0.12) or bh > (h * 0.12):
+            if area < 3.0 or bw < 2.0 or bh < 2.0 or bw > max_blob or bh > max_blob:
                 continue
             aspect = min(bw, bh) / max(1e-6, max(bw, bh))
             if aspect < 0.32:
@@ -586,11 +771,12 @@ class OBREngine:
         # Filter out fringe artifacts / anti-aliasing edge crescents (< 30% of median dot area)
         if len(dark_blobs) >= 4:
             med_a_d = float(np.median([b["area"] for b in dark_blobs]))
-            dark_blobs = [b for b in dark_blobs if b["area"] >= (0.30 * med_a_d)]
+            # also drop merged multi-dot blobs from the coarse DoG octave (> 4x median area)
+            dark_blobs = [b for b in dark_blobs if (0.30 * med_a_d) <= b["area"] <= (4.0 * med_a_d)]
 
         if len(light_blobs) >= 4:
             med_a_l = float(np.median([b["area"] for b in light_blobs]))
-            light_blobs = [b for b in light_blobs if b["area"] >= (0.30 * med_a_l)]
+            light_blobs = [b for b in light_blobs if (0.30 * med_a_l) <= b["area"] <= (4.0 * med_a_l)]
 
         if not dark_blobs:
             return [], 0.0
@@ -601,41 +787,41 @@ class OBREngine:
         # Match paired shadow and highlight for embossed Braille
         paired_dots: List[Dict[str, float]] = []
         used_l = set()
+        # Vectorized nearest-highlight lookup (was a pure-Python O(n*m) loop: several
+        # seconds per frame when large dots produce thousands of faint candidate blobs).
+        l_xy = np.array([[b["x"], b["y"]] for b in light_blobs], dtype=np.float64).reshape(-1, 2)
+        l_free = np.ones(len(light_blobs), dtype=bool)
         for d_blob in dark_blobs:
             best_l = None
             best_dist = float("inf")
-            for l_idx, l_blob in enumerate(light_blobs):
-                if l_idx in used_l:
-                    continue
-                dist = math.hypot(d_blob["x"] - l_blob["x"], d_blob["y"] - l_blob["y"])
-                if dist <= max_pair_dist and dist < best_dist:
-                    best_dist = dist
-                    best_l = l_idx
+            if len(l_xy):
+                dists = np.hypot(l_xy[:, 0] - d_blob["x"], l_xy[:, 1] - d_blob["y"])
+                dists[~l_free] = np.inf
+                j = int(np.argmin(dists))
+                if dists[j] <= max_pair_dist:
+                    best_l, best_dist = j, float(dists[j])
 
             if best_l is not None and best_dist >= (est_d * 0.25):
                 l_match = light_blobs[best_l]
                 diam_ratio = max(d_blob["d"], l_match["d"]) / max(1e-3, min(d_blob["d"], l_match["d"]))
                 if diam_ratio <= 2.2:
                     used_l.add(best_l)
+                    l_free[best_l] = False
                     # Center of embossed dot is midpoint between shadow and highlight
                     cx = (d_blob["x"] + l_match["x"]) / 2.0
                     cy = (d_blob["y"] + l_match["y"]) / 2.0
                     dot_d = (d_blob["d"] + l_match["d"]) / 2.0
                     paired_dots.append({"x": cx, "y": cy, "d": dot_d, "score": d_blob["score"] + l_match["score"]})
-                else:
+                elif not embossed_only:
                     paired_dots.append({"x": d_blob["x"], "y": d_blob["y"], "d": d_blob["d"], "score": d_blob["score"]})
-            else:
+            elif not embossed_only:
                 # Solid ink dot or top-lit spot
                 paired_dots.append({"x": d_blob["x"], "y": d_blob["y"], "d": d_blob["d"], "score": d_blob["score"]})
 
         # Non-maximum suppression / deduplicate any dots closer than 0.52 * est_d
         paired_dots.sort(key=lambda d: d["score"], reverse=True)
-        final_dots: List[Dict[str, float]] = []
         suppress_r = max(3.0, est_d * 0.52)
-        for cand in paired_dots:
-            if any(math.hypot(cand["x"] - ex["x"], cand["y"] - ex["y"]) <= suppress_r for ex in final_dots):
-                continue
-            final_dots.append(cand)
+        final_dots = OBREngine._nms_points(paired_dots, suppress_r)
 
         final_d = float(np.median([d["d"] for d in final_dots])) if final_dots else 0.0
         return final_dots, final_d
@@ -704,6 +890,81 @@ class OBREngine:
         skew_deg = float(np.median(angles_deg)) if len(angles_deg) >= 3 else 0.0
         return skew_deg, p_dot
 
+    @staticmethod
+    def _fit_cell_lattice(
+        col_xs: List[float],
+        col_w: List[int],
+        p_dot: float,
+        pairs: List[Tuple[float, float]],
+    ) -> Tuple[float, float, float]:
+        """
+        Fit the horizontal cell lattice of one Braille line.
+
+        Each cell k has a left column at x0 + k*p_cell and a right column at
+        x0 + k*p_cell + p_col. Searches p_cell over [1.9, 4.4] * p_dot (standard Braille
+        is ~2.4; printed charts/signage are often wider) and every column-anchored x0,
+        keeping the lattice that fits the most dot columns, then refines (x0, p_cell, p_col)
+        by least squares. Returns (x0, p_cell, p_col).
+
+        This replaces "median of pair-distance / k", which with only a couple of
+        paired columns picked a wrong divisor and drifted ~1 column per few cells.
+        """
+        default_x0 = pairs[0][0] if pairs else (col_xs[0] if col_xs else 0.0)
+        if len(col_xs) < 2 or p_dot <= 0:
+            return default_x0, p_dot * 2.4, p_dot
+
+        xs = np.asarray(col_xs, dtype=np.float64)
+        ws = np.asarray(col_w, dtype=np.float64)
+        tol = 0.30 * p_dot
+        best = None  # (score, x0, pc)
+        for ratio in np.arange(1.9, 4.401, 0.02):
+            pc = ratio * p_dot
+            # anchor lattice so that some column is a left (x0 = x) or right (x0 = x - p_dot) column
+            x0_cands = np.concatenate([xs, xs - p_dot])
+            phase = (xs[None, :] - x0_cands[:, None]) % pc
+            dist = np.minimum(np.minimum(phase, np.abs(phase - p_dot)), pc - phase)
+            fit = np.clip(1.0 - (dist / tol) ** 2, 0.0, None) * ws[None, :]
+            scores = fit.sum(axis=1)
+            # Mild prior toward the standard 2.4 ratio, and toward the first column being a left column
+            scores = scores - 0.02 * abs(ratio - 2.4)
+            scores[: len(xs)] += 0.01
+            i = int(np.argmax(scores))
+            if best is None or scores[i] > best[0] + 1e-9:
+                best = (float(scores[i]), float(x0_cands[i]), float(pc))
+
+        _, x0, pc = best
+        p_col = p_dot
+
+        # Least-squares refinement on inlier columns: x = x0 + k*pc + c*p_col
+        for _ in range(2):
+            rows_a, rows_b, rows_w = [], [], []
+            for x, w in zip(xs, ws):
+                k = math.floor((x - x0 + 0.5 * (pc - p_col)) / pc)
+                rem = x - (x0 + k * pc)
+                c = 0 if rem < 0.5 * p_col else 1
+                if abs(rem - c * p_col) > tol:
+                    continue
+                rows_a.append([1.0, float(k), float(c)])
+                rows_b.append(x)
+                rows_w.append(w)
+            if len(rows_a) < 3:
+                break
+            A = np.asarray(rows_a)
+            b = np.asarray(rows_b)
+            sw = np.sqrt(np.asarray(rows_w))
+            if np.ptp(A[:, 1]) == 0:
+                break
+            if np.ptp(A[:, 2]) == 0:
+                # no right columns among inliers: keep p_col fixed
+                sol, *_ = np.linalg.lstsq((A[:, :2] * sw[:, None]), (b - A[:, 2] * p_col) * sw, rcond=None)
+                nx0, npc, npcol = sol[0], sol[1], p_col
+            else:
+                sol, *_ = np.linalg.lstsq(A * sw[:, None], b * sw, rcond=None)
+                nx0, npc, npcol = sol
+            if 1.7 * p_dot <= npc <= 4.6 * p_dot and 0.7 * p_dot <= npcol <= 1.3 * p_dot:
+                x0, pc, p_col = float(nx0), float(npc), float(npcol)
+        return x0, pc, p_col
+
     @classmethod
     def decode_dots_to_text(
         cls,
@@ -757,6 +1018,19 @@ class OBREngine:
             for l in lines:
                 l.sort(key=lambda d: d["rx"])
 
+        # Drop stray "lines" made of 1-2 isolated dots (paper texture, dust, page edge)
+        # when the frame clearly contains real Braille lines.
+        if len(lines) > 1 and max(len(l) for l in lines) >= 6:
+            lines = [l for l in lines if len(l) >= 3]
+
+        # Drop "flat" lines (every dot on one horizontal row) such as the printed letter labels
+        # under a Braille chart, when other lines show real multi-row cells.
+        if len(lines) > 1:
+            def _spread(l: List[Dict[str, float]]) -> float:
+                return max(d["ry"] for d in l) - min(d["ry"] for d in l)
+            if any(_spread(l) >= 0.8 * p_dot for l in lines):
+                lines = [l for l in lines if not (len(l) >= 3 and _spread(l) < 0.35 * p_dot)]
+
         cell_pitch_default = p_dot * 2.4
         decoded_lines: List[Dict[str, Any]] = []
         word_idx = 0
@@ -770,8 +1044,7 @@ class OBREngine:
 
             # 2. Fit best top-row baseline y0 such that y0, y0+p_dot, y0+2*p_dot maximize dot fit
             ys = np.array([d["ry"] for d in line_dots], dtype=np.float64)
-            best_y0 = float(np.min(ys))
-            best_err = float("inf")
+            y_cands: List[Tuple[float, float]] = []
             for y_anchor in ys:
                 for offset in (0, 1, 2):
                     cand_y0 = y_anchor - offset * p_dot
@@ -779,10 +1052,19 @@ class OBREngine:
                         np.abs(ys[:, None] - (cand_y0 + np.array([0.0, p_dot, 2.0 * p_dot])[None, :])),
                         axis=1,
                     )
-                    err = float(np.sum(row_dists))
-                    if err < best_err:
-                        best_err = err
-                        best_y0 = float(cand_y0)
+                    y_cands.append((float(np.sum(row_dists)), float(cand_y0)))
+            min_err = min(e for e, _ in y_cands)
+            # A line using only two dot rows fits "rows 1-2" and "rows 2-3" equally well, and
+            # noise used to pick rows 2-3 (turning a-j into , ; : . punctuation). Almost every
+            # letter has a top-row dot (1 or 4), so among near-equal fits prefer the one whose
+            # topmost dots are row 1 (i.e. the largest y0).
+            # Only break genuine ties: the alternative must fit essentially as well (and fit well).
+            slack = 0.03 * p_dot * len(ys) + 1.0
+            good_fit = min_err <= 0.15 * p_dot * len(ys)
+            if good_fit:
+                best_y0 = max(y0 for e, y0 in y_cands if e <= min_err + slack)
+            else:
+                best_y0 = min(y_cands)[1]
 
             # 3. Cluster horizontal dot positions into vertical sub-columns
             line_dots.sort(key=lambda d: d["rx"])
@@ -811,31 +1093,20 @@ class OBREngine:
                 else:
                     i += 1
 
-            p_cell = p_dot * 2.4
-            if len(pairs) >= 2:
-                diffs = [pairs[j + 1][0] - pairs[j][0] for j in range(len(pairs) - 1)]
-                cands = []
-                for df in diffs:
-                    for k in range(1, 10):
-                        pitch = df / k
-                        if 2.1 * p_dot <= pitch <= 2.7 * p_dot:
-                            cands.append(pitch)
-                if cands:
-                    p_cell = float(np.median(cands))
-
-            x0 = pairs[0][0] if pairs else col_xs[0]
+            col_w = [len(sc) for sc in sub_cols]
+            x0, p_cell, p_col = cls._fit_cell_lattice(col_xs, col_w, p_dot, pairs)
 
             # Assign each dot to (cell_k, col in {0, 1}, row in {0, 1, 2})
             # Decision boundary between cell k and k+1 is midway between col 1 and next col 0:
-            # col 1 is at 1.0 * p_dot, next col 0 is at p_cell (~2.4 * p_dot). Midpoint = (p_cell + p_dot) / 2
-            half_gap = 0.5 * (p_cell - p_dot)
+            # col 1 is at 1.0 * p_col, next col 0 is at p_cell. Midpoint = (p_cell + p_col) / 2
+            half_gap = 0.5 * (p_cell - p_col)
             cells_bits: Dict[int, List[int]] = {}
             for d in line_dots:
                 dx = d["rx"] - x0
                 k = int(math.floor((dx + half_gap) / p_cell))
                 x_cell = x0 + k * p_cell
                 rem = d["rx"] - x_cell
-                col = 0 if rem < (0.5 * p_dot) else 1
+                col = 0 if rem < (0.5 * p_col) else 1
                 row = int(round((d["ry"] - best_y0) / p_dot))
                 row = max(0, min(2, row))
                 bits = cells_bits.setdefault(k, [0, 0, 0, 0, 0, 0])
@@ -996,7 +1267,7 @@ class OBREngine:
             "dot_diameter": dot_diam,
         }
 
-    def braille_presence_confidence(self, image: np.ndarray) -> float:
+    def braille_presence_confidence(self, image: np.ndarray, max_side: Optional[int] = 640) -> float:
         """
         Fast heuristic confidence score [0.0, 1.0] for Braille page presence.
 
@@ -1036,13 +1307,17 @@ class OBREngine:
                 return 0.0
 
             # 2. Reject high-frequency noise frames where std(gray - blur) is abnormally high
+            # Robust (median-based) noise estimate: sensor/random noise is high everywhere, but
+            # crisp printed content (chart boxes, ink letters) only spikes at its edges. The old
+            # std-based measure rejected sharp, high-contrast photos of printed Braille charts.
             blur = cv2.GaussianBlur(gray, (5, 5), 0)
-            if float(np.std(gray.astype(np.float32) - blur.astype(np.float32))) > 8.0:
+            hf = np.abs(gray.astype(np.float32) - blur.astype(np.float32))
+            if 1.4826 * float(np.median(hf)) > 8.0:
                 return 0.0
 
             h, w = image.shape[:2]
-            if max(w, h) > 640:
-                scale = 640.0 / float(max(w, h))
+            if max_side and max(w, h) > max_side:
+                scale = float(max_side) / float(max(w, h))
                 small = cv2.resize(image, (int(w * scale), int(h * scale)))
             else:
                 small = image
@@ -1188,11 +1463,363 @@ class OBREngine:
             "dot_count": len(dots),
         }
 
+    def _record_history(self, frame: np.ndarray, readable: bool, text: str, reason: str) -> None:
+        if self._deferred_history is not None:
+            self._deferred_history.append((frame, readable, text, reason))
+        else:
+            self._save_scan_history(frame, readable, text, reason)
+
+    @staticmethod
+    def _score_result(res: Dict[str, Any]) -> float:
+        """Rank a decode result: valid letters count, unknown cells are heavily penalised."""
+        if not res or not res.get("readable") or not str(res.get("text", "")).strip():
+            return -1.0
+        chars = [c for c in str(res.get("text", "")) if not c.isspace()]
+        valid = sum(1 for c in chars if c.isalnum())
+        unknown = sum(1 for c in chars if c == UNKNOWN_CELL_CHAR)
+        punct = len(chars) - valid - unknown
+        return valid - 3.0 * unknown - 0.5 * punct
+
+    # Strategy order for scan_frame(): (full_frame, detector)
+    #   "shadow"   : side-lit embossed dots (bright cap + one-directional shadow), see detect_shadow_dots()
+    #   "auto"     : classic DoG detector, ink + embossed
+    #   "embossed" : classic DoG detector, embossed_only=True (rejects nearby handwriting/print)
+    SCAN_STRATEGIES: Tuple[Tuple[bool, str], ...] = (
+        (False, "shadow"),
+        (False, "auto"),
+        (True, "auto"),
+        (True, "shadow"),
+        (False, "embossed"),
+        (True, "embossed"),
+    )
+
+    @staticmethod
+    def _is_clean(res: Optional[Dict[str, Any]]) -> bool:
+        if not res or not res.get("readable"):
+            return False
+        text = str(res.get("text", ""))
+        return UNKNOWN_CELL_CHAR not in text and sum(c.isalnum() for c in text) >= 2
+
+    def scan_frame(self, image: np.ndarray, strategies: Optional[Sequence[Tuple[bool, Any]]] = None) -> Dict[str, Any]:
+        """
+        Decode one camera frame, handling ink-printed AND embossed Braille.
+
+        - Ink dots are solid dark blobs; embossed_only=True erases them, so the scanner
+          used to be unable to read printed Braille.
+        - Real embossed paper under a side light shows each dot as a small bright cap with
+          a long shadow; the classic DoG detector drowns in paper texture there, so the
+          "shadow" detector handles it.
+        Tries the strategies, keeps the best-scoring result, prefers the line inside the
+        center box over a multi-line full-frame read, and saves one debug image per scan.
+        """
+        strategies = tuple(strategies or self.SCAN_STRATEGIES)
+        self._shadow_cache = None  # shadow detection is per full frame; reuse it across strategies
+        results: List[Tuple[float, Dict[str, Any], Optional[Tuple[Any, ...]]]] = []
+        first_fail: Optional[Dict[str, Any]] = None
+        first_fail_hist: Optional[Tuple[Any, ...]] = None
+        skip_classic = False
+        for idx, (full, kind) in enumerate(strategies):
+            if isinstance(kind, bool):  # legacy (full_frame, embossed_only)
+                kind = "embossed" if kind else "auto"
+            if skip_classic and kind != "shadow":
+                continue
+            self._deferred_history = []
+            try:
+                if kind == "shadow":
+                    res = self.process_shadow(image, full_frame=full)
+                else:
+                    res = self.process_image(image, full_frame=full, embossed_only=(kind == "embossed"))
+            finally:
+                hist = self._deferred_history[-1] if self._deferred_history else None
+                self._deferred_history = None
+            res["strategy"] = {"full_frame": full, "embossed_only": kind == "embossed", "detector": kind}
+            score = self._score_result(res)
+            if score < 0:
+                if first_fail is None or (first_fail.get("reason") == "no_braille" and res.get("reason") != "no_braille"):
+                    first_fail, first_fail_hist = res, hist
+                # Classic quality-gate failures are identical for every classic strategy.
+                if kind != "shadow" and res.get("reason") == "blurry":
+                    skip_classic = True
+            else:
+                results.append((score, res, hist))
+            # The first three (shadow ROI, classic ROI, classic full frame) always compete;
+            # after that stop as soon as we hold a clean read.
+            if idx >= 2 and any(self._is_clean(r) for _, r, _ in results):
+                break
+
+        if not results:
+            if first_fail_hist is not None:
+                self._save_scan_history(*first_fail_hist)
+            return first_fail or {"readable": False, "reason": "no_braille", "text": "", "cells": []}
+
+        results.sort(key=lambda t: t[0], reverse=True)
+        _, chosen, chosen_hist = results[0]
+
+        # The user aims one line inside the center box. If the winner is a multi-line
+        # full-frame read but a clean ROI read exists, read what was aimed at.
+        def _lines(r: Dict[str, Any]) -> int:
+            return len([ln for ln in str(r.get("text", "")).split("\n") if ln.strip()])
+
+        def _core(t: str) -> str:
+            return "".join(c for c in t if c.isalnum())
+
+        if chosen.get("strategy", {}).get("full_frame"):
+            roi_clean = [(sc, r, h) for sc, r, h in results
+                         if not r.get("strategy", {}).get("full_frame") and self._is_clean(r)]
+            if roi_clean and _lines(roi_clean[0][1]) < _lines(chosen):
+                roi_core = _core(str(roi_clean[0][1].get("text", "")))
+                full_lines = [_core(ln) for ln in str(chosen.get("text", "")).split("\n")]
+                # ROI read is just a clipped piece of a longer full-frame line -> keep full frame
+                clipped = any(roi_core in fl and len(fl) > len(roi_core) for fl in full_lines)
+                if not clipped:
+                    _, chosen, chosen_hist = roi_clean[0]
+
+        if chosen_hist is not None:
+            self._save_scan_history(*chosen_hist)
+        self._shadow_cache = None
+        return chosen
+
+    # =========================================================================
+    # Side-lit embossed Braille ("shadow" detector)
+    # =========================================================================
+
+    @staticmethod
+    def _shadow_caps(d: np.ndarray, thr: float) -> List[Dict[str, float]]:
+        """Bright caps above `thr` in the background-subtracted map `d`, with local shadow vector."""
+        h, w = d.shape[:2]
+        nb, _, sb, cb = cv2.connectedComponentsWithStats((d > thr).astype(np.uint8), connectivity=8)
+        darkw = np.clip(-d - 0.5 * thr, 0, None)
+        caps: List[Dict[str, float]] = []
+        for i in range(1, nb):
+            a = float(sb[i, cv2.CC_STAT_AREA])
+            bw = float(sb[i, cv2.CC_STAT_WIDTH])
+            bh = float(sb[i, cv2.CC_STAT_HEIGHT])
+            if a < 4 or a > 0.002 * h * w or max(bw, bh) > 0.06 * max(h, w):
+                continue
+            x, y = float(cb[i][0]), float(cb[i][1])
+            L = max(bw, bh)
+            R = int(max(6, 0.9 * L))
+            x0, x1 = max(0, int(x) - R), min(w, int(x) + R + 1)
+            y0, y1 = max(0, int(y) - R), min(h, int(y) + R + 1)
+            win = darkw[y0:y1, x0:x1]
+            s = float(win.sum())
+            vx = vy = 0.0
+            if s > 0:
+                yy, xx = np.mgrid[y0:y1, x0:x1]
+                vx = float((win * xx).sum() / s - x)
+                vy = float((win * yy).sum() / s - y)
+            caps.append({"x": x, "y": y, "a": a, "L": L, "vx": vx, "vy": vy, "s": s})
+        return caps
+
+    @staticmethod
+    def _shadow_keep(caps: List[Dict[str, float]], d: np.ndarray, thr: float, mx: float, my: float) -> List[Dict[str, float]]:
+        """Keep caps with a deep shadow along the page-wide light direction (mx, my)."""
+        h, w = d.shape[:2]
+        dots: List[Dict[str, float]] = []
+        for c in caps:
+            ts = np.linspace(0.4 * c["L"], 1.6 * c["L"], 12)
+            px = np.clip((c["x"] + ts * mx).astype(int), 0, w - 1)
+            py = np.clip((c["y"] + ts * my).astype(int), 0, h - 1)
+            if float(d[py, px].min()) < -thr:
+                dots.append({"x": c["x"], "y": c["y"], "d": 2.0 * math.sqrt(c["a"] / math.pi), "score": c["s"] + c["a"]})
+        return dots
+
+    @classmethod
+    def detect_shadow_dots_ex(cls, image: np.ndarray) -> Tuple[List[Dict[str, float]], float, List[Dict[str, float]]]:
+        """
+        detect_shadow_dots() plus a list of WEAK candidates: caps that pass the same test at
+        half the threshold (and are not already strong dots). A real dot whose cap or shadow
+        is partly swallowed by a neighbouring dot's shadow (e.g. dot 4 right after dot 1)
+        lands here; process_shadow() keeps only the weak candidates that sit on the Braille
+        grid of the strong dots, so paper texture never gets in.
+
+        The background is a median over ~1/15 of the image's short side. On a slim center
+        strip that kernel shrinks to one dot pitch and the dots' own shadows become
+        "background", so callers must pass the FULL frame and crop the result afterwards.
+        """
+        if image is None or cv2 is None or getattr(image, "size", 0) == 0:
+            return [], 0.0, []
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+        h, w = gray.shape[:2]
+        k = max(21, (min(h, w) // 15) | 1)
+        bg = cv2.medianBlur(gray, k).astype(np.float32)
+        d = cv2.GaussianBlur(gray.astype(np.float32) - bg, (0, 0), 1.2)
+        sigma = 1.4826 * float(np.median(np.abs(d - np.median(d))))
+        thr = max(15.0, 6.0 * sigma)
+        caps = cls._shadow_caps(d, thr)
+
+        # Pass 1: page-wide shadow direction from caps with a clear one-sided shadow
+        clear = [c for c in caps if c["s"] > 0 and math.hypot(c["vx"], c["vy"]) > 0.25 * c["L"]]
+        if len(clear) < 3:
+            return [], 0.0, []
+        ux = np.array([c["vx"] for c in clear])
+        uy = np.array([c["vy"] for c in clear])
+        nrm = np.hypot(ux, uy)
+        ux, uy = ux / nrm, uy / nrm
+        wts = np.array([c["s"] for c in clear])
+        mx = float((ux * wts).sum() / wts.sum())
+        my = float((uy * wts).sum() / wts.sum())
+        n = math.hypot(mx, my)
+        if n < 0.5:  # shadows don't share one direction: not side-lit embossed Braille
+            return [], 0.0, []
+        mx, my = mx / n, my / n
+
+        # Pass 2: keep caps with a deep shadow along that direction (a cap sitting between two
+        # shadows, e.g. dot 4 right after dot 1's shadow, has no net local direction but passes here)
+        dots = cls._shadow_keep(caps, d, thr, mx, my)
+        if len(dots) >= 4:
+            med = float(np.median([q["score"] for q in dots]))
+            dots = [q for q in dots if q["score"] >= 0.25 * med]  # specks / stray marks have tiny shadows
+        if not dots:
+            return [], 0.0, []
+        diam = float(np.median([q["d"] for q in dots]))
+
+        # Weak pass at half threshold, same light direction; drop anything already found.
+        weak_all = cls._shadow_keep(cls._shadow_caps(d, 0.5 * thr), d, 0.5 * thr, mx, my)
+        weak: List[Dict[str, float]] = []
+        if weak_all:
+            sx = np.array([q["x"] for q in dots])
+            sy = np.array([q["y"] for q in dots])
+            for q in weak_all:
+                if float(np.min(np.hypot(sx - q["x"], sy - q["y"]))) > 0.6 * diam * 1.8:
+                    weak.append(q)
+        return dots, diam, weak
+
+    @classmethod
+    def detect_shadow_dots(cls, image: np.ndarray) -> Tuple[List[Dict[str, float]], float]:
+        """
+        Detect embossed dots photographed under a side light (desk lamp / window), where
+        each dot is a small bright cap followed by a long dark shadow, all shadows pointing
+        the same way. Paper texture (+/-10 grey levels) and handwriting (dark, no bright cap)
+        are rejected because a dot must be a strong bright cap WITH a deep shadow along the
+        page-wide light direction.
+        """
+        dots, diam, _weak = cls.detect_shadow_dots_ex(image)
+        return dots, diam
+
+    @classmethod
+    def _recover_grid_dots(
+        cls, dots: List[Dict[str, float]], weak: List[Dict[str, float]], diam: float
+    ) -> List[Dict[str, float]]:
+        """
+        Add weak candidates that lie exactly on the dot grid of the strong dots: same column
+        or one dot pitch to the side, and 0/1/2 pitches up or down, of some strong dot within
+        a cell's reach. One missed dot turns P into L, so this second chance matters; the
+        grid test keeps paper specks out.
+        """
+        if not dots or not weak:
+            return list(dots)
+        _skew, p = cls._estimate_skew_and_pitch(dots, diam)
+        if p <= 0:
+            return list(dots)
+        tol = 0.25 * p
+        # A real dot photographed in the same light has a cap+shadow strength comparable to
+        # its neighbours; a grid-aligned speck does not (QUIZ -> QUSZ came from a 0.35x one).
+        min_score = 0.5 * float(np.median([q["score"] for q in dots]))
+        sx = np.array([q["x"] for q in dots])
+        sy = np.array([q["y"] for q in dots])
+        out = list(dots)
+        for q in sorted(weak, key=lambda z: z["score"], reverse=True):
+            if q["score"] < min_score:
+                continue
+            dx = np.abs(sx - q["x"])
+            dy = np.abs(sy - q["y"])
+            near = np.hypot(dx, dy)
+            if float(near.min()) < 0.6 * p:
+                continue  # duplicate of a strong dot
+            col_ok = (dx < tol) | (np.abs(dx - p) < tol)
+            row_ok = (dy < tol) | (np.abs(dy - p) < tol) | (np.abs(dy - 2.0 * p) < tol)
+            if bool(np.any(col_ok & row_ok & (near <= 2.5 * p))):
+                out.append({"x": q["x"], "y": q["y"], "d": q["d"], "score": q["score"], "recovered": True})
+                sx = np.append(sx, q["x"])
+                sy = np.append(sy, q["y"])
+        return out
+
+    def process_shadow(self, image: np.ndarray, full_frame: bool = False) -> Dict[str, Any]:
+        """
+        Decode side-lit embossed Braille with the shadow detector.
+
+        Detection always runs on the FULL frame (the background estimate needs more than
+        a strip's worth of paper); the center-strip mode then keeps only the dots inside the
+        box, so aiming one line into the box and reading the whole page use the same dots.
+        """
+        fail: Dict[str, Any] = {"readable": False, "reason": "no_braille", "text": "", "cells": [], "dots": []}
+        if image is None or getattr(image, "size", 0) == 0 or cv2 is None:
+            return fail
+        h, w = image.shape[:2]
+        if full_frame:
+            x0, y0, crop = 0, 0, image
+        else:
+            rw, rh = int(w * ROI_W_FRAC), int(h * ROI_H_FRAC)
+            x0, y0 = (w - rw) // 2, (h - rh) // 2
+            crop = image[y0:y0 + rh, x0:x0 + rw]
+
+        cache = getattr(self, "_shadow_cache", None)
+        if cache is not None and cache[0] is image and cache[1] == image.shape:
+            all_dots, diam, weak = cache[2]
+        else:
+            all_dots, diam, weak = self.detect_shadow_dots_ex(image)
+            self._shadow_cache = (image, image.shape, (all_dots, diam, weak))
+        all_dots = self._recover_grid_dots(all_dots, weak, diam)
+
+        ch, cw = crop.shape[:2]
+        dots = [
+            {**q, "x": q["x"] - x0, "y": q["y"] - y0}
+            for q in all_dots
+            if x0 <= q["x"] < x0 + cw and y0 <= q["y"] < y0 + ch
+        ]
+
+        dbg = image.copy() if image.ndim == 3 else cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        if not full_frame:
+            cv2.rectangle(dbg, (x0, y0), (x0 + crop.shape[1], y0 + crop.shape[0]), (255, 200, 0), 2)
+        for q in dots:
+            cv2.circle(dbg, (int(q["x"] + x0), int(q["y"] + y0)), max(3, int(q["d"] / 2)), (0, 255, 0), 1)
+
+        if len(dots) < 3:
+            cv2.putText(dbg, "UNREADABLE: no_braille (shadow)", (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 255), 2)
+            self._record_history(dbg, False, "", "no_braille")
+            fail["dots"] = [{"x": q["x"] + x0, "y": q["y"] + y0, "d": q["d"]} for q in dots]
+            return fail
+
+        res = self.decode_dots_to_text(dots, diam, crop.shape, single_line=False)
+        text = str(res.get("text", "")).strip()
+        chars = [c for c in text if not c.isspace()]
+        unknown = sum(1 for c in chars if c == UNKNOWN_CELL_CHAR)
+        if not text or not any(c.isalnum() for c in chars) or (chars and unknown / len(chars) > 0.30):
+            res.update({"readable": False, "reason": "no_braille", "text": "", "cells": [], "boxes": []})
+            text = ""
+        readable = bool(res.get("readable")) and bool(text)
+
+        for b in (res.get("boxes", []) if readable else []):
+            b["x"] += x0
+            b["y"] += y0
+            bx, by = int(b["x"] - b["w"] / 2), int(b["y"] - b["h"] / 2)
+            cv2.rectangle(dbg, (bx, by), (bx + int(b["w"]), by + int(b["h"])), (0, 0, 255), 2)
+            if b.get("label"):
+                cv2.putText(dbg, str(b["label"]), (bx, max(14, by - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+        header = f"DECODED: {text}" if readable else "UNREADABLE: no_braille (shadow)"
+        cv2.putText(dbg, header.replace("\n", " / "), (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75,
+                    (0, 255, 0) if readable else (0, 0, 255), 2)
+        self._record_history(dbg, readable, text, "ok" if readable else "no_braille")
+
+        for q in dots:
+            q["x"] += x0
+            q["y"] += y0
+        res["dots"] = dots
+        res["text"] = text
+        res["words"] = [t for t in text.split() if t]
+        res["readable"] = readable
+        res["reason"] = "ok" if readable else "no_braille"
+        if not readable:
+            res["cells"] = []
+        logger.info("Scanner result (shadow): dots=%d readable=%s text=%r", len(dots), readable, text)
+        return res
+
     @staticmethod
     def _save_scan_history(target_frame: np.ndarray, readable: bool, text: str, reason: str) -> None:
         """
         Saves last_scan.jpg AND timestamped scan history file (scan_YYYYMMDD_HHMMSS_<tag>.jpg).
-        Caps history at the latest 30 scans to protect Raspberry Pi storage.
+        Caps history at the latest 200 scans to protect Raspberry Pi storage.
         Updates debug_scan/index.html so users can view all scans via any web browser.
         """
         if target_frame is None or getattr(target_frame, "size", 0) == 0:
@@ -1219,12 +1846,12 @@ class OBREngine:
             hist_path = os.path.join(debug_dir, hist_filename)
             cv2.imwrite(hist_path, target_frame)
 
-            # 3. Retention pruning: keep newest 30 scans
+            # 3. Retention pruning: keep newest 200 scans
             all_scans = sorted(
                 [f for f in os.listdir(debug_dir) if f.startswith("scan_") and f.endswith(".jpg")],
                 reverse=True,
             )
-            for old_file in all_scans[30:]:
+            for old_file in all_scans[200:]:
                 try:
                     os.remove(os.path.join(debug_dir, old_file))
                 except Exception:
@@ -1295,6 +1922,7 @@ p.sub {{ text-align: center; color: #aaa; margin-bottom: 24px; }}
         image: np.ndarray,
         debug_dump: bool = False,
         full_frame: Optional[bool] = None,
+        embossed_only: bool = False,
     ) -> Dict[str, Any]:
         """
         Decode physical Braille image using quality gates + classical dot-grid recognizer:
@@ -1311,19 +1939,25 @@ p.sub {{ text-align: center; color: #aaa; margin-bottom: 24px; }}
 
         quality_ok, reason, lap_var = self.check_image_quality(image)
         if not quality_ok:
-            self._save_scan_history(image, False, "", reason)
+            self._record_history(image, False, "", reason)
             logger.info("Scanner result: quality gate failed reason=%s lap_var=%.2f", reason, lap_var)
             return {"readable": False, "reason": reason, "text": "", "cells": [], "lap_var": lap_var}
 
         # Braille presence confidence heuristic gate: reject computer screens, terminal text, and random noise
         gray_full = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
-        if float(np.mean(gray_full < 90)) > 0.15 or self.braille_presence_confidence(image) < 0.20:
+        dark_frac = float(np.mean(gray_full < 90))
+        presence = self.braille_presence_confidence(image) if dark_frac <= 0.15 else 0.0
+        if dark_frac <= 0.15 and presence < 0.20 and max(image.shape[:2]) > 640:
+            # The fast check downsamples to 640px, which shrinks small/far dots below the
+            # detector's size floor. Re-check at native resolution before rejecting the scan.
+            presence = self.braille_presence_confidence(image, max_side=None)
+        if dark_frac > 0.15 or presence < 0.20:
             dbg_fail = image.copy()
             if len(dbg_fail.shape) == 2:
                 dbg_fail = cv2.cvtColor(dbg_fail, cv2.COLOR_GRAY2BGR)
             cv2.putText(dbg_fail, "UNREADABLE: no_braille", (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 255), 2)
-            self._save_scan_history(dbg_fail, False, "", "no_braille")
-            logger.info("Scanner result: no Braille detected (dark=%.2f, conf=%.2f)", float(np.mean(gray_full < 90)), self.braille_presence_confidence(image))
+            self._record_history(dbg_fail, False, "", "no_braille")
+            logger.info("Scanner result: no Braille detected (dark=%.2f, conf=%.2f)", dark_frac, presence)
             return {"readable": False, "reason": "no_braille", "text": "", "cells": [], "lap_var": lap_var}
 
         h, w = image.shape[:2]
@@ -1350,13 +1984,14 @@ p.sub {{ text-align: center; color: #aaa; margin-bottom: 24px; }}
         clean_crop = self.suppress_printed_ink(crop)
 
         # 3. Detect dots directly (preserves true geometric crescent pairs)
-        dots, dot_diam = self.detect_dots(clean_crop)
+        dots, dot_diam = self.detect_dots(clean_crop, embossed_only=embossed_only)
 
         # 3b. Adaptive contrast enhancement fallback for faint dots under diffuse lighting
         if len(dots) < 8:
             enhanced_crop = self.enhance_contrast(clean_crop)
-            e_dots, e_diam = self.detect_dots(enhanced_crop)
-            if len(e_dots) > len(dots) and len(e_dots) <= 2500 and e_diam >= 2.0:
+            e_dots, e_diam = self.detect_dots(enhanced_crop, embossed_only=embossed_only)
+            max_allowed = max(45, len(dots) * 6) if embossed_only else 2500
+            if len(e_dots) > len(dots) and len(e_dots) <= max_allowed and e_diam >= 2.0:
                 dots, dot_diam = e_dots, e_diam
 
         # Automatic center-crop fallback if full frame produced < 2 dots
@@ -1367,9 +2002,9 @@ p.sub {{ text-align: center; color: #aaa; margin-bottom: 24px; }}
             c_y0 = (h - c_roi_h) // 2
             c_crop = image[c_y0 : c_y0 + c_roi_h, c_x0 : c_x0 + c_roi_w].copy()
             clean_c = self.suppress_printed_ink(c_crop)
-            c_dots, c_diam = self.detect_dots(clean_c)
+            c_dots, c_diam = self.detect_dots(clean_c, embossed_only=embossed_only)
             if 0 < len(c_dots) < 8:
-                c_dots_e, c_diam_e = self.detect_dots(self.enhance_contrast(clean_c))
+                c_dots_e, c_diam_e = self.detect_dots(self.enhance_contrast(clean_c), embossed_only=embossed_only)
                 if len(c_dots_e) > len(c_dots):
                     c_dots, c_diam = c_dots_e, c_diam_e
             if len(c_dots) >= 2:
@@ -1394,7 +2029,7 @@ p.sub {{ text-align: center; color: #aaa; margin-bottom: 24px; }}
         if len(dots) < 2 or (0 < dot_diam < 3.8):
             res_reason = "too_small" if (0 < dot_diam < 3.8) else "no_braille"
             cv2.putText(dbg_img, f"UNREADABLE: {res_reason}", (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 255), 2)
-            self._save_scan_history(dbg_img, False, "", res_reason)
+            self._record_history(dbg_img, False, "", res_reason)
             logger.info("Scanner result: dot_count=%d dot_pitch=0.00 cells_found=0 readable=False reason=%s text=''", len(dots), res_reason)
             return {
                 "readable": False,
@@ -1511,7 +2146,7 @@ p.sub {{ text-align: center; color: #aaa; margin-bottom: 24px; }}
         cv2.putText(target_dbg_frame, header_txt, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75, header_color, 2)
 
         # Save debug image to debug_scan/last_scan.jpg and timestamped history
-        self._save_scan_history(target_dbg_frame, readable, text, reason)
+        self._record_history(target_dbg_frame, readable, text, reason)
 
         # Shift coordinates if ROI was used
         if x0 != 0 or y0 != 0:

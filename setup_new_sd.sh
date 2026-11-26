@@ -39,6 +39,7 @@ sudo apt-get install -y \
     libportaudio2 \
     libgl1 \
     v4l-utils \
+    python3-picamera2 \
     curl
 
 # 2. Add user to hardware groups & enable SPI/I2C

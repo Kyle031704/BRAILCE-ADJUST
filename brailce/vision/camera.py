@@ -199,20 +199,40 @@ class PiCameraDevice(CameraDevice):
             logger.info("PiCameraDevice: Picamera2 initialized cleanly (still=%s)", self.resolution)
             return True
         except Exception as exc:
-            # Fallback to OpenCV V4L2 webcam if physically present (Linux/USB only)
+            logger.warning("PiCameraDevice: Picamera2 unavailable (%s); trying OpenCV VideoCapture(0).", exc)
+            # Fallback to OpenCV V4L2 webcam if physically present (Linux/USB only).
+            # On a Pi 5, /dev/video0 is usually an rp1-cfe/pisp pipeline node that OPENS
+            # but never delivers a usable frame, so an isOpened() check alone used to mark
+            # the camera "active" and the app then saw only None/black frames. Require a
+            # real, non-black frame before accepting the fallback.
             if cv2 is not None:
+                cap = None
                 try:
                     cap = cv2.VideoCapture(0)
                     if cap is not None and cap.isOpened():
-                        self._cap = cap
-                        self._is_active = True
-                        self.init_error = None
-                        logger.info("PiCameraDevice: Initialized via OpenCV VideoCapture(0).")
-                        return True
-                    elif cap is not None:
+                        got = False
+                        t0 = time.time()
+                        while time.time() - t0 < 2.5:
+                            ret, frame = cap.read()
+                            if ret and frame is not None and frame.size > 0 and float(np.mean(frame)) > 1.0 and float(np.std(frame)) > 1.0:
+                                got = True
+                                break
+                            time.sleep(0.04)
+                        if got:
+                            self._cap = cap
+                            self._is_active = True
+                            self.init_error = None
+                            logger.info("PiCameraDevice: Initialized via OpenCV VideoCapture(0).")
+                            return True
+                        logger.warning("PiCameraDevice: VideoCapture(0) opened but delivered no usable frame (ISP/CFE node?).")
+                    if cap is not None:
                         cap.release()
                 except Exception:
-                    pass
+                    if cap is not None:
+                        try:
+                            cap.release()
+                        except Exception:
+                            pass
 
             self._picam2 = None
             self._cap = None
@@ -323,11 +343,62 @@ class UsbWebcamDevice(CameraDevice):
         self._is_active = False
         self.init_error: Optional[str] = None
         self._latest_frame: Optional[np.ndarray] = None
+        self._latest_ts: float = 0.0  # monotonic time the latest frame was read
         self._lock = threading.Lock()
+        # cv2.VideoCapture is NOT thread-safe: every read/grab/release goes through this lock.
+        self._cap_lock = threading.Lock()
+        # Prevents overlapping reconnect attempts (preview loop + capture_image both trigger them).
+        self._reconnect_lock = threading.Lock()
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
         self._init_camera()
+
+    # A buffered frame older than this is treated as stale (camera unplugged / stream stalled).
+    STALE_FRAME_S: float = 1.5
+    # Probe budget. Opening a DirectShow/V4L2 device costs ~1 s and a webcam's auto-exposure
+    # needs up to ~2 s before it delivers a non-black frame. The old 1.5 s / 6 s budget was
+    # exhausted by a black first device (IR camera, covered lens, metadata node) before the
+    # real camera got a full warm-up, ending in "No functional USB camera found".
+    WARMUP_S: float = 2.5
+    PROBE_TOTAL_S: float = 20.0
+
+    def _reader_alive(self) -> bool:
+        return bool(self._running and self._thread is not None and self._thread.is_alive())
+
+    def _fresh_frame(self, newer_than: float = 0.0) -> Optional[np.ndarray]:
+        """Return a copy of the buffered frame if it is not stale (and newer than `newer_than`)."""
+        with self._lock:
+            if self._latest_frame is None:
+                return None
+            ts = self._latest_ts
+            if time.monotonic() - ts > self.STALE_FRAME_S or ts <= newer_than:
+                return None
+            return self._latest_frame.copy()
+
+    def _wait_fresh_frame(self, newer_than: float, timeout: float) -> Optional[np.ndarray]:
+        """Wait (up to timeout) for the reader thread to deliver a frame newer than `newer_than`."""
+        end = time.monotonic() + timeout
+        while True:
+            frame = self._fresh_frame(newer_than)
+            if frame is not None or time.monotonic() >= end or not self._reader_alive():
+                return frame
+            time.sleep(0.01)
+
+    def _direct_read(self, num_grabs: int = 0) -> Optional[np.ndarray]:
+        """Read straight from the device (only used when the reader thread is not running)."""
+        with self._cap_lock:
+            if not self._cap or not self._cap.isOpened():
+                return None
+            for _ in range(max(0, num_grabs)):
+                self._cap.grab()
+            ret, frame = self._cap.read()
+        if ret and frame is not None and frame.size > 0:
+            with self._lock:
+                self._latest_frame = frame
+                self._latest_ts = time.monotonic()
+            return frame.copy()
+        return None
 
     @staticmethod
     def probe_device_candidates() -> list[Any]:
@@ -361,9 +432,17 @@ class UsbWebcamDevice(CameraDevice):
                         pass
                 candidates.append(node)
 
-        # Fallback numeric indices (only 0, 1, 2)
+        # Fallback numeric indices (only 0, 1, 2). On Linux an index IS /dev/videoN, so name
+        # it that way: otherwise 0 and "/dev/video0" are probed twice (and a USB webcam's
+        # metadata node, or a Pi 5 rp1-cfe node, would be opened again under its index).
         for idx in (0, 1, 2):
-            candidates.append(idx)
+            if os.name != "nt" and os.path.exists(f"/dev/video{idx}"):
+                dname = UsbWebcamDevice._v4l2_node_name(idx)
+                if dname and any(k in dname for k in ISP_FILTER):
+                    continue
+                candidates.append(f"/dev/video{idx}")
+            else:
+                candidates.append(idx)
 
         # De-duplicate, resolve symlinks, and guard against high-index nodes
         seen = set()
@@ -389,10 +468,36 @@ class UsbWebcamDevice(CameraDevice):
 
         return unique
 
+    # V4L2 nodes that are never a camera: Pi 5 rp1-cfe / pisp pipeline queues, codecs, metadata.
+    ISP_NODE_NAMES: tuple = ("isp", "codec", "meta", "cfe", "pisp", "hevc", "rpi-hevc", "bcm2835")
+
+    @classmethod
+    def _v4l2_node_name(cls, target: Any) -> str:
+        """sysfs name of a Linux video node (index or /dev/videoN), '' when unknown."""
+        if os.name == "nt":
+            return ""
+        node = f"/dev/video{target}" if isinstance(target, int) else str(target)
+        if not node.startswith("/dev/video"):
+            return ""
+        name_file = f"/sys/class/video4linux/{os.path.basename(node)}/name"
+        try:
+            with open(name_file, "r") as f:
+                return f.read().strip().lower()
+        except Exception:
+            return ""
+
     def _open_capture(self, dev: Any, deadline: Optional[float] = None) -> Optional[Any]:
         if cv2 is None:
             return None
         target = int(dev) if str(dev).isdigit() else str(dev)
+
+        # The numeric fallbacks 0/1/2 bypassed the sysfs name filter: on a Pi 5 with a CSI
+        # camera, index 0 is an rp1-cfe node that opens but never streams, eating the probe
+        # budget. Apply the same filter to indices.
+        node_name = self._v4l2_node_name(target)
+        if node_name and any(k in node_name for k in self.ISP_NODE_NAMES):
+            logger.info("UsbWebcamDevice: Skipping %s (%s is a pipeline/metadata node, not a camera)", target, node_name)
+            return None
 
         # Never try high-index /dev/video nodes (Pi 5 ISP/codec hardware queues)
         if isinstance(target, str) and target.startswith("/dev/video"):
@@ -434,13 +539,19 @@ class UsbWebcamDevice(CameraDevice):
                 except Exception:
                     pass
 
-                # Warm-up: up to 20 frames, per-device cap ~1.5s
+                # Warm-up: read until the auto-exposure delivers a non-black frame
+                # (up to WARMUP_S per device; a frame-count cap alone ends too early on
+                # cameras that stream black frames at 30 fps while exposure settles).
+                warmup_s = float(getattr(self, "WARMUP_S", 2.5))
                 start_time = time.time()
                 valid = False
-                for _ in range(20):
+                black_frames = 0
+                cut_by_deadline = False
+                while True:
                     if deadline is not None and time.time() >= deadline:
+                        cut_by_deadline = True
                         break
-                    if time.time() - start_time > 1.5:
+                    if time.time() - start_time > warmup_s:
                         break
                     ret, test_frame = cap.read()
                     if ret and test_frame is not None and test_frame.size > 0:
@@ -448,6 +559,11 @@ class UsbWebcamDevice(CameraDevice):
                         s = float(np.std(test_frame))
                         if m > 1.0 and s > 1.0:
                             valid = True
+                            break
+                        black_frames += 1
+                        # A camera that has streamed black at full rate for over a second is
+                        # not warming up (IR/depth camera, covered lens): stop early.
+                        if black_frames >= 25 and time.time() - start_time > 1.0:
                             break
                     time.sleep(0.04)
 
@@ -457,8 +573,20 @@ class UsbWebcamDevice(CameraDevice):
                     logger.info("UsbWebcamDevice: Opened device %s (%dx%d, backend %s, warm-up OK)", target, act_w, act_h, backend)
                     return cap
 
-                logger.warning("UsbWebcamDevice: Candidate %s opened but failed warm-up (mean/std check)", target)
                 cap.release()
+                if cut_by_deadline:
+                    logger.warning("UsbWebcamDevice: Candidate %s warm-up cut short by the probe deadline", target)
+                    break
+                if black_frames > 0:
+                    # The device streams, but only black frames: an IR/depth camera, a covered
+                    # lens, or a metadata node. Another backend will not change that, so move
+                    # on to the next device instead of burning the probe budget here.
+                    logger.warning(
+                        "UsbWebcamDevice: Candidate %s streams only black frames (%d read) - skipping "
+                        "(IR camera / covered lens?)", target, black_frames,
+                    )
+                    break
+                logger.warning("UsbWebcamDevice: Candidate %s opened but delivered no frames on backend %s", target, backend)
             except Exception as exc:
                 if cap is not None:
                     try:
@@ -475,7 +603,10 @@ class UsbWebcamDevice(CameraDevice):
             return False
 
         # Try user-configured device first, then probe candidates
-        candidates = [self.device] + self.probe_device_candidates()
+        configured = self.device
+        if os.name != "nt" and str(configured).isdigit() and os.path.exists(f"/dev/video{configured}"):
+            configured = f"/dev/video{configured}"  # same node as the probe list, so it is not opened twice
+        candidates = [configured] + self.probe_device_candidates()
         seen = set()
         unique_cands = []
         for c in candidates:
@@ -484,10 +615,10 @@ class UsbWebcamDevice(CameraDevice):
                 seen.add(s)
                 unique_cands.append(c)
 
-        deadline = time.time() + 6.0
+        deadline = time.time() + self.PROBE_TOTAL_S
         for dev in unique_cands:
             if time.time() >= deadline:
-                logger.warning("UsbWebcamDevice: Whole probe cap ~6s reached, stopping search.")
+                logger.warning("UsbWebcamDevice: Whole probe cap ~%.0fs reached, stopping search.", self.PROBE_TOTAL_S)
                 break
             cap = self._open_capture(dev, deadline=deadline)
             if cap is not None:
@@ -560,20 +691,32 @@ class UsbWebcamDevice(CameraDevice):
 
     def _start_reader_thread(self) -> None:
         self._running = True
-        self._thread = threading.Thread(target=self._capture_worker, daemon=True, name="usb-cam-reader")
+        self._reader_gen = getattr(self, "_reader_gen", 0) + 1
+        self._thread = threading.Thread(
+            target=self._capture_worker, args=(self._reader_gen,), daemon=True, name="usb-cam-reader"
+        )
         self._thread.start()
 
-    def _capture_worker(self) -> None:
+    def _capture_worker(self, gen: int = 0) -> None:
         """Continuously grab latest frame to guarantee zero latency and discard queued frames."""
-        while self._running:
-            if not self._cap or not self._cap.isOpened():
-                time.sleep(0.5)
-                continue
+        # Exit if a reconnect has started a newer reader (old one may have been stuck in read()).
+        while self._running and gen == getattr(self, "_reader_gen", gen):
             try:
-                ret, frame = self._cap.read()
+                with self._cap_lock:
+                    cap = self._cap
+                    if cap is None or not cap.isOpened():
+                        ret, frame = False, None
+                        opened = False
+                    else:
+                        opened = True
+                        ret, frame = cap.read()
+                if not opened:
+                    time.sleep(0.5)
+                    continue
                 if ret and frame is not None and frame.size > 0:
                     with self._lock:
                         self._latest_frame = frame
+                        self._latest_ts = time.monotonic()
                 else:
                     time.sleep(0.02)
             except Exception:
@@ -586,32 +729,27 @@ class UsbWebcamDevice(CameraDevice):
         if not self._is_active:
             raise CameraNotConnectedError(self.init_error or "Camera not connected")
 
-        with self._lock:
-            if self._latest_frame is not None:
-                return self._latest_frame.copy()
+        frame = self._get_frame(timeout=0.5)
+        if frame is not None:
+            return frame
 
-        # Direct grab fallback
-        if self._cap and self._cap.isOpened():
-            for _ in range(2):  # Flush any stale buffer frame
-                self._cap.grab()
-            ret, frame = self._cap.read()
-            if ret and frame is not None and frame.size > 0:
+        # No fresh frame: stream stalled or camera unplugged -> reconnect once.
+        logger.warning("USB webcam produced no fresh frame; attempting automatic reconnection...")
+        if self.reconnect():
+            frame = self._get_frame(timeout=1.0)
+            if frame is not None:
                 return frame
 
-        # Automatic reconnect retry if USB read temporarily returns False
-        logger.warning("USB webcam read returned False; attempting automatic reconnection...")
-        if self.reconnect():
-            with self._lock:
-                if self._latest_frame is not None:
-                    return self._latest_frame.copy()
-            if self._cap and self._cap.isOpened():
-                for _ in range(2):
-                    self._cap.grab()
-                ret, frame = self._cap.read()
-                if ret and frame is not None and frame.size > 0:
-                    return frame
-
         raise CameraNotConnectedError("USB Camera stream lost")
+
+    def _get_frame(self, timeout: float, newer_than: float = 0.0, num_grabs: int = 2) -> Optional[np.ndarray]:
+        """Fresh frame from the reader thread, or a direct read when the thread is not running."""
+        frame = self._fresh_frame(newer_than)
+        if frame is not None:
+            return frame
+        if self._reader_alive():
+            return self._wait_fresh_frame(newer_than, timeout)
+        return self._direct_read(num_grabs=num_grabs)
 
     def capture_frame(self) -> Optional[np.ndarray]:
         """Alias for capture_image."""
@@ -625,18 +763,13 @@ class UsbWebcamDevice(CameraDevice):
         if not self._is_active:
             raise CameraNotConnectedError(self.init_error or "Camera not connected")
 
-        if self._cap and self._cap.isOpened():
-            for _ in range(max(1, num_grabs)):
-                self._cap.grab()
-            ret, frame = self._cap.read()
-            if ret and frame is not None and frame.size > 0:
-                with self._lock:
-                    self._latest_frame = frame
-                return frame.copy()
-
-        with self._lock:
-            if self._latest_frame is not None and getattr(self._latest_frame, "size", 0) > 0:
-                return self._latest_frame.copy()
+        # The reader thread keeps the driver buffer drained, so "flushing" means waiting
+        # for a frame that was read *after* this call (guaranteed post-press content).
+        # Grabbing directly here while the reader thread runs would race on VideoCapture.
+        requested_at = time.monotonic()
+        frame = self._get_frame(timeout=1.0, newer_than=requested_at, num_grabs=num_grabs)
+        if frame is not None:
+            return frame
 
         return self.capture_image()
 
@@ -647,26 +780,43 @@ class UsbWebcamDevice(CameraDevice):
 
         try:
             return self.flush_and_capture(num_grabs=5)
+        except CameraNotConnectedError:
+            raise
         except Exception:
-            with self._lock:
-                if self._latest_frame is not None and getattr(self._latest_frame, "size", 0) > 0:
-                    return self._latest_frame.copy()
+            frame = self._fresh_frame()
+            if frame is not None:
+                return frame
             return self.capture_image()
 
     def reconnect(self) -> bool:
-        """Attempt to re-initialize camera connection without crashing."""
-        self.close()
-        time.sleep(0.2)
-        return self._init_camera()
+        """Attempt to re-initialize camera connection without crashing.
+
+        Only one reconnect runs at a time; concurrent callers return False immediately
+        instead of tearing down a camera another thread is in the middle of opening.
+        """
+        if not self._reconnect_lock.acquire(blocking=False):
+            return False
+        try:
+            self.close()
+            time.sleep(0.2)
+            return self._init_camera()
+        finally:
+            self._reconnect_lock.release()
 
     def close(self) -> None:
         self._running = False
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=1.0)
-        if self._cap:
-            try:
-                self._cap.release()
-            except Exception:
-                pass
-            self._cap = None
+        self._thread = None
+        with self._cap_lock:
+            if self._cap:
+                try:
+                    self._cap.release()
+                except Exception:
+                    pass
+                self._cap = None
+        with self._lock:
+            # Drop the buffered frame so a disconnected camera can't keep serving a frozen image.
+            self._latest_frame = None
+            self._latest_ts = 0.0
         self._is_active = False

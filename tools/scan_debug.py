@@ -10,6 +10,10 @@ Usage:
     python tools/scan_debug.py --image tools/enhanced_braille.jpg --out debug_out.png
     python tools/scan_debug.py --image tools/enhanced_braille.jpg --debug
     python tools/scan_debug.py --camera --out cam_debug.png
+    python tools/scan_debug.py --camera --loop          # press Enter to scan again, q to quit
+
+--camera uses the same camera selection as the app (USB webcam first, then Pi Camera)
+and the same decode path as Scanner Mode (OBREngine.scan_frame: ink + embossed).
 """
 
 from __future__ import annotations
@@ -56,7 +60,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Inspect Brailce OBR dot & cell detection.")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--image", help="Path to input image file")
-    group.add_argument("--camera", action="store_true", help="Capture sharpest frame from PiCameraDevice")
+    group.add_argument("--camera", action="store_true", help="Capture from USB webcam (or Pi Camera fallback)")
+    parser.add_argument("--loop", action="store_true", help="With --camera: scan again on every Enter (q to quit)")
     parser.add_argument("--out", help="Optional path to save annotated debug image")
     parser.add_argument(
         "--debug",
@@ -82,45 +87,90 @@ def main() -> int:
         if cv2 is None:
             print("OpenCV (cv2) is required for camera capture.", file=sys.stderr)
             return 1
-        from brailce.vision.camera import PiCameraDevice
-        cam = PiCameraDevice()
-        if not cam.is_available():
-            print(f"Camera unavailable: {cam.init_error}", file=sys.stderr)
+        cam = _open_camera()
+        if cam is None:
             return 1
         try:
-            image = cam.capture_sharpest(n=5)
+            n = 0
+            if args.loop and input("Aim the camera at the Braille, then [Enter] to scan ([q] quit): ").strip().lower().startswith("q"):
+                return 0
+            while True:
+                image = _grab(cam)
+                if image is None:
+                    print("Failed to capture frame from camera.", file=sys.stderr)
+                    return 1
+                n += 1
+                out = args.out
+                if out and args.loop:
+                    root, ext = os.path.splitext(out)
+                    out = f"{root}_{n}{ext or '.png'}"
+                _run_and_report(image, args.debug, out)
+                if not args.loop:
+                    return 0
+                if input("\n[Enter] scan again, [q] quit: ").strip().lower().startswith("q"):
+                    return 0
         finally:
-            cam.close()
-        if image is None:
-            print("Failed to capture frame from camera.", file=sys.stderr)
-            return 1
+            if hasattr(cam, "close"):
+                cam.close()
 
+    _run_and_report(image, args.debug, args.out)
+    return 0
+
+
+def _open_camera():
+    from brailce.vision.camera import PiCameraDevice, UsbWebcamDevice
+    usb = UsbWebcamDevice()
+    if usb.is_available():
+        print(f"camera       : USB webcam {usb.device}")
+        return usb
+    usb.close()
+    pi = PiCameraDevice()
+    if pi.is_available():
+        print("camera       : Raspberry Pi Camera")
+        return pi
+    print(f"Camera unavailable: USB: {usb.init_error} | PiCam: {pi.init_error}", file=sys.stderr)
+    return None
+
+
+def _grab(cam):
+    import time
+    time.sleep(0.5)  # let exposure/autofocus settle
+    try:
+        return cam.capture_sharpest(n=5)
+    except Exception as exc:
+        print(f"capture error: {exc}", file=sys.stderr)
+        return None
+
+
+def _run_and_report(image, debug: bool, out) -> None:
+    import time
     engine = OBREngine()
-    result = engine.process_image(image, debug_dump=args.debug)
+    t0 = time.time()
+    result = engine.scan_frame(image)
+    dt = time.time() - t0
+    print(f"frame        : {image.shape[1]}x{image.shape[0]}")
     print(f"readable     : {result.get('readable')}")
     print(f"reason       : {result.get('reason')}")
+    print(f"strategy     : {result.get('strategy')}")
     print(f"dot_pitch    : {result.get('dot_pitch', 0.0):.2f} px")
     print(f"dots         : {len(result.get('dots', []))}")
     print(f"cells        : {len(result.get('cells', []))}")
+    print(f"time         : {dt:.2f} s")
     print(f"text         : {result.get('text')!r}")
 
-    if args.debug:
+    if debug:
         print("\n--- per-cell diagnostics ---")
         for i, cell in enumerate(result.get("cells", [])):
-            print(
-                f"  cell {i}: char={cell['char']!r}  bitmask={cell['dots_str']}  "
-                f"x={cell['x']:.1f}  y={cell['y']:.1f}"
-            )
+            print(f"  cell {i}: char={cell.get('char')!r}  {cell.get('dots_str', '')}  "
+                  f"line={cell.get('line_index', 0)} word={cell.get('word_index', 0)}")
 
-    if args.out:
+    if out:
         if cv2 is not None:
-            annotated = annotate_result(image, result)
-            cv2.imwrite(args.out, annotated)
+            cv2.imwrite(out, annotate_result(image, result))
         else:
-            PILImage.fromarray(image).save(args.out)
-        print(f"annotated    : {args.out}")
-
-    return 0
+            PILImage.fromarray(image).save(out)
+        print(f"annotated    : {out}")
+    print("debug image  : debug_scan/last_scan.jpg")
 
 
 if __name__ == "__main__":

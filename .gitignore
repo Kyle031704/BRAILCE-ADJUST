@@ -105,3 +105,7 @@ speaker_sweep_out/
 # Speaker + amplifier + voice output PROOF TEST artifacts (tools/make_proof_signals.py / tools/speaker_amp_proof_test.sh)
 proof_signals/
 speaker_amp_proof_*.txt
+# Camera / driver report output (tools/pi_camera_report.sh)
+pi_camera_report_*.txt
+pi_camera_report_frame.jpg
+camera_check.jpg

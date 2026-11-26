@@ -7,6 +7,9 @@ except ImportError:
     print("Error: cv2 or numpy not installed.")
     sys.exit(1)
 
+# Allow running as `python3 tools/camera_check.py` from the project root
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from brailce.vision.camera import UsbWebcamDevice
 
 print("=== Brailce Camera Diagnostic ===")

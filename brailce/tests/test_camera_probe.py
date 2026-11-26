@@ -107,3 +107,50 @@ class TestCameraProbe(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPi5NodeFiltering(unittest.TestCase):
+    """Raspberry Pi 5: rp1-cfe / pisp pipeline nodes open but never stream."""
+
+    def test_numeric_index_pointing_at_cfe_node_is_skipped(self):
+        cam = UsbWebcamDevice.__new__(UsbWebcamDevice)
+        cam.WARMUP_S = 0.1
+        with patch("brailce.vision.camera.os.name", "posix"), \
+             patch("builtins.open", unittest.mock.mock_open(read_data="rp1-cfe-csi2_ch0\n")), \
+             patch("cv2.VideoCapture") as vc:
+            self.assertIsNone(cam._open_capture(0))
+            vc.assert_not_called()
+
+    def test_numeric_index_of_real_webcam_is_opened(self):
+        cam = UsbWebcamDevice.__new__(UsbWebcamDevice)
+        cam.WARMUP_S = 1.0
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.read.return_value = (True, np.random.randint(50, 200, (480, 640, 3), dtype=np.uint8))
+        mock_cap.get.return_value = 640
+        with patch("brailce.vision.camera.os.name", "posix"), \
+             patch("builtins.open", unittest.mock.mock_open(read_data="USB 2.0 Camera: USB Camera\n")), \
+             patch("cv2.VideoCapture", return_value=mock_cap):
+            self.assertIsNotNone(cam._open_capture(0))
+
+    def test_black_only_device_does_not_try_second_backend(self):
+        cam = UsbWebcamDevice.__new__(UsbWebcamDevice)
+        cam.WARMUP_S = 0.3
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.read.return_value = (True, np.zeros((480, 640, 3), dtype=np.uint8))
+        with patch("cv2.VideoCapture", return_value=mock_cap) as vc:
+            self.assertIsNone(cam._open_capture(0))
+            self.assertEqual(vc.call_count, 1)
+
+    def test_picamera_fallback_rejects_capture_without_frames(self):
+        from brailce.vision.camera import PiCameraDevice
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.read.return_value = (False, None)
+        with patch.dict("sys.modules", {"picamera2": None}), \
+             patch("cv2.VideoCapture", return_value=mock_cap), \
+             patch("brailce.vision.camera.time.time", side_effect=[0.0, 0.0, 10.0, 10.0, 10.0, 10.0]):
+            dev = PiCameraDevice()
+        self.assertFalse(dev.is_available())
+        mock_cap.release.assert_called()
