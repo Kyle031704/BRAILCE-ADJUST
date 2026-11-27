@@ -186,7 +186,7 @@ class TestILI9488TypedContentLowercase:
 
     def test_empty_placeholder_is_a_label(self, lcd: ILI9488Display) -> None:
         lcd.show_text_buffer("")
-        assert "(Empty - type letters to practice)" in lcd._draw.texts
+        assert "Type letters on the keypad to practice" in lcd._draw.texts
 
     def test_ai_query_input_lowercase_and_stored(self, lcd: ILI9488Display) -> None:
         lcd._current_mode = AppMode.AI_ASSISTANT
@@ -202,7 +202,7 @@ class TestILI9488TypedContentLowercase:
         lcd.show_ai_response("The Quick Brown Fox jumps.", query="WHAT IS RAIN?")
         assert "what is rain?"[:20] in " ".join(lcd._draw.texts)
         assert "The Quick Brown Fox" not in lcd._draw.texts  # answer is wrapped separately
-        assert "AI ANSWER:" in lcd._draw.texts               # header label untouched
+        assert "AI ANSWER" in lcd._draw.texts                # header label untouched
 
     def test_math_equation_digits_unaffected(self, lcd: ILI9488Display) -> None:
         lcd.show_math_result(
@@ -210,27 +210,56 @@ class TestILI9488TypedContentLowercase:
             result="8",
             explanation="Start at 5, and count up 3 more: 6, 7, 8.",
         )
-        assert "Equation: 5 + 3 = 8" in lcd._draw.texts
-        assert any(t.startswith("Counting Explanation") for t in lcd._draw.texts)
+        assert "5 + 3 =" in lcd._draw.texts   # big equation, answer drawn in the accent colour
+        assert "8" in lcd._draw.texts
+        assert "COUNTING EXPLANATION" in lcd._draw.texts
 
     def test_status_labels_untouched(self, lcd: ILI9488Display) -> None:
         lcd.show_text_buffer("APPLE")
         # Mode pill + card headers stay uppercase; only the typed buffer is lowered.
-        assert "ACCUMULATED SENTENCE BUFFER:" in lcd._draw.texts
-        assert "ACTIVE CHARACTER:" not in lcd._draw.texts  # drawn by show_character, not here
+        assert "TYPED TEXT" in lcd._draw.texts
+        assert "apple" in lcd._draw.texts
 
     def test_scanner_buffer_has_scanner_label_and_no_free_input_hint(self, lcd: ILI9488Display) -> None:
         lcd._current_mode = AppMode.SCANNER
         lcd._last_status_msg = None
         lcd.show_text_buffer("LUPA")
-        assert "SCANNED TEXT:" in lcd._draw.texts
-        assert "ACCUMULATED SENTENCE BUFFER:" not in lcd._draw.texts
+        assert "SCANNED TEXT" in lcd._draw.texts
+        assert "TYPED TEXT" not in lcd._draw.texts
         assert lcd._last_status_msg is None  # no "Letters: N | Press Space..." hint in Scanner
 
     def test_braille_dots_label_not_doubled(self, lcd: ILI9488Display) -> None:
         lcd.show_braille("V", "Dots 1-2-3-6", "")
-        assert "Dots: 1-2-3-6" in lcd._draw.texts
-        assert not any("Dots: Dots" in t for t in lcd._draw.texts)
+        assert "1-2-3-6" in lcd._draw.texts
+        assert not any("Dots" in t for t in lcd._draw.texts)
+
+
+    def test_multi_cell_braille_shows_every_cell(self, lcd: ILI9488Display) -> None:
+        # Math answer "14" in Nemeth: two cells, must not be merged into one cell.
+        lcd.show_braille("⠂⠲", "Dot 2 Dots 2-5-6", "")
+        assert "2 | 2-5-6" in lcd._draw.texts
+        assert not any("Dot 2 Dots" in t for t in lcd._draw.texts)
+
+    def test_math_result_braille_goes_into_result_panel(self, lcd: ILI9488Display) -> None:
+        lcd._current_mode = AppMode.MATH
+        lcd.show_math_result(equation="11 + 3", result="14", explanation="Count up 3 more.")
+        lcd._draw.texts.clear()
+        lcd.show_braille("⠂⠲", "Dot 2 Dots 2-5-6", "")
+        assert lcd._layout == "math_result"          # result card stays on screen
+        assert "CHARACTER" not in lcd._draw.texts      # typing cards are not drawn over it
+
+    def test_math_typing_status_is_math_hint(self, lcd: ILI9488Display) -> None:
+        lcd._current_mode = AppMode.MATH
+        lcd.show_text_buffer("2+3")
+        assert lcd._last_status_msg.startswith("Ready for math input")
+
+
+class TestILI9488Fonts:
+    def test_bundled_dejavu_font_is_used(self) -> None:
+        display = ILI9488Display()
+        font = display._f(15)
+        assert font.getname()[0] == "DejaVu Sans"
+        assert display._f(15, bold=True).getname()[1] == "Bold"
 
 
 class TestILI9488BatteryIndicator:

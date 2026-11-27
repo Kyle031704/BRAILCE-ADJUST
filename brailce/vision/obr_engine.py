@@ -1294,9 +1294,15 @@ class OBREngine:
              of median pitch. Contributes to final score.
 
         Returns confidence in [0.0, 1.0]. Caller decides threshold (default 0.60).
+        Coloured Braille (dots that differ from the board in colour, not brightness) is
+        scored on its colour-contrast image, see color_contrast_image().
         """
         if image is None or cv2 is None or image.size == 0:
             return 0.0
+        if os.environ.get("BRAILCE_COLOR_SCAN", "1") != "0":
+            color_img, color_info = self.color_contrast_image(image)
+            if color_img is not None and color_info.get("prefer"):
+                image = color_img
         try:
             ok, _reason, _lap = self.check_image_quality(image)
             if not ok:
@@ -1565,7 +1571,157 @@ class OBREngine:
         text = str(res.get("text", ""))
         return UNKNOWN_CELL_CHAR not in text and sum(c.isalnum() for c in text) >= 2
 
+    # =========================================================================
+    # Coloured Braille (e.g. red dots on a green 3D-printed board)
+    # =========================================================================
+
+    # Minimum spread (0.5..99.5 percentile range) of the principal a*b* colour axis.
+    # A range, not a std: Braille dots cover only ~1% of the frame.
+    COLOR_MIN_SPREAD: float = 30.0
+    # Colour is preferred when the two colour classes (dots / board) are at least this far
+    # apart in a*b* and their grayscale brightness differs by less than COLOR_LUMA_RATIO x that.
+    COLOR_MIN_SEPARATION: float = 20.0
+    COLOR_LUMA_RATIO: float = 0.6
+    # Frames with this much colour (90th percentile chroma) also get a colour read that
+    # competes with the grayscale read.
+    COLOR_RETRY_CHROMA: float = 25.0
+
+    @classmethod
+    def color_contrast_image(cls, image: np.ndarray) -> Tuple[Optional[np.ndarray], Dict[str, Any]]:
+        """
+        Build a grayscale-like image from the colour axis that best separates Braille dots
+        from their background.
+
+        A normal grayscale conversion maps red (~91) and green (~103) to almost the same
+        gray, so red dots on a green board vanish. Here the a*b* chroma of the center box is
+        reduced to its principal axis (red<->green, blue<->yellow, ... whatever varies most),
+        projected for the whole frame, flipped so the minority class (the dots) is dark like
+        ink, and contrast-stretched. The result is returned as a 3-channel BGR image so the
+        existing detectors can run on it unchanged.
+
+        Returns (image or None, info). info["prefer"] is True when colour carries clearly more
+        contrast than brightness; image is None for achromatic pages (white paper, etc.).
+        """
+        info: Dict[str, Any] = {"prefer": False, "colorful": False}
+        if cv2 is None or image is None or image.ndim != 3 or image.shape[2] < 3 or image.size == 0:
+            return None, info
+        try:
+            bgr = image[:, :, :3]
+            if bgr.dtype != np.uint8:
+                bgr = np.clip(bgr, 0, 255).astype(np.uint8)
+            h, w = bgr.shape[:2]
+
+            # Statistics on a small copy of the center reading box
+            s = min(1.0, 320.0 / float(max(h, w)))
+            small = cv2.resize(bgr, None, fx=s, fy=s, interpolation=cv2.INTER_AREA) if s < 1.0 else bgr
+            sh, sw = small.shape[:2]
+            rw, rh = max(4, int(sw * ROI_W_FRAC)), max(4, int(sh * ROI_H_FRAC))
+            rx, ry = (sw - rw) // 2, (sh - rh) // 2
+            def _stats(region: np.ndarray):
+                # Brightness is measured exactly as the grayscale pipeline sees it (BGR2GRAY),
+                # stored in channel 0 so the class comparison below uses it.
+                lab_r = cv2.cvtColor(region, cv2.COLOR_BGR2LAB).astype(np.float32)
+                lab_r[:, :, 0] = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY).astype(np.float32)
+                ab_r = lab_r[:, :, 1:3].reshape(-1, 2) - 128.0
+                mean_r = ab_r.mean(axis=0)
+                _, evecs_r = np.linalg.eigh(np.cov((ab_r - mean_r).T))
+                axis_r = evecs_r[:, -1]
+                p_lo, p_hi = np.percentile((ab_r - mean_r) @ axis_r, [0.5, 99.5])
+                return lab_r, ab_r, mean_r, axis_r, float(p_hi - p_lo)
+
+            # Center reading box first; the whole frame when the box holds no colour detail
+            # (line aimed off-center -> the full-frame strategies read it).
+            lab, ab, mean, axis, spread = _stats(small[ry:ry + rh, rx:rx + rw])
+            info["stats_region"] = "roi"
+            if spread < cls.COLOR_MIN_SPREAD:
+                lab_f, ab_f, mean_f, axis_f, spread_f = _stats(small)
+                if spread_f >= cls.COLOR_MIN_SPREAD:
+                    lab, ab, mean, axis, spread = lab_f, ab_f, mean_f, axis_f, spread_f
+                    info["stats_region"] = "frame"
+            lum_std = float(lab[:, :, 0].std())
+            chroma90 = float(np.percentile(np.hypot(ab[:, 0], ab[:, 1]), 90))
+
+            roi_proj = (ab - mean) @ axis
+
+            # Split the region into its two colours (dots vs board) and compare how far apart
+            # they are in colour versus in brightness. Red vs green: far apart in colour,
+            # nearly equal in brightness -> grayscale cannot see the dots, colour can.
+            # Percentiles are wide (0.1..99.9) because dots cover only ~1% of the pixels.
+            d_chroma = d_luma = 0.0
+            m_dot = m_board = 0.0
+            if spread >= cls.COLOR_MIN_SPREAD:
+                lo0, hi0 = np.percentile(roi_proj, [0.1, 99.9])
+                if hi0 - lo0 > 1e-3:
+                    u = np.clip((roi_proj - lo0) / (hi0 - lo0) * 255.0, 0, 255).astype(np.uint8)
+                    thr, _ = cv2.threshold(u.reshape(-1, 1), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                    hi_cls = u > thr
+                    n_hi = int(hi_cls.sum())
+                    if 0 < n_hi < hi_cls.size:
+                        lum = lab[:, :, 0].ravel()
+                        m_hi, m_lo = float(roi_proj[hi_cls].mean()), float(roi_proj[~hi_cls].mean())
+                        d_chroma = abs(m_hi - m_lo)
+                        d_luma = float(abs(lum[hi_cls].mean() - lum[~hi_cls].mean()))
+                        # The smaller class is the dots
+                        m_dot, m_board = (m_hi, m_lo) if n_hi < hi_cls.size - n_hi else (m_lo, m_hi)
+
+            info.update({
+                "chroma_spread": round(spread, 2),
+                "luma_std": round(lum_std, 2),
+                "chroma90": round(chroma90, 2),
+                "d_chroma": round(d_chroma, 2),
+                "d_luma": round(d_luma, 2),
+                "axis": [round(float(axis[0]), 3), round(float(axis[1]), 3)],
+            })
+            info["colorful"] = chroma90 >= cls.COLOR_RETRY_CHROMA
+            info["prefer"] = d_chroma >= cls.COLOR_MIN_SEPARATION and d_luma < cls.COLOR_LUMA_RATIO * d_chroma
+            if not (info["prefer"] or info["colorful"]) or d_chroma < 1e-3:
+                return None, info
+
+            # Project the full frame and map dot colour -> dark (30), board colour -> light (230)
+            full_lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+            proj = (full_lab[:, :, 1] - 128.0 - mean[0]) * axis[0] + (full_lab[:, :, 2] - 128.0 - mean[1]) * axis[1]
+            gray = np.clip(30.0 + (proj - m_dot) / (m_board - m_dot) * 200.0, 0, 255).astype(np.uint8)
+            return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR), info
+        except Exception as exc:
+            logger.debug("color_contrast_image failed: %s", exc)
+            return None, info
+
     def scan_frame(self, image: np.ndarray, strategies: Optional[Sequence[Tuple[bool, Any]]] = None) -> Dict[str, Any]:
+        """
+        Decode one camera frame: plain Braille pages and coloured Braille.
+
+        - Achromatic pages (white paper, embossed or printed): unchanged grayscale path.
+        - Colour clearly carries the dots (e.g. red dots on green, same gray brightness):
+          only the colour-contrast image is decoded.
+        - Colourful frame where brightness also separates: grayscale and colour reads
+          compete on score.
+        Set BRAILCE_COLOR_SCAN=0 to disable the colour path.
+        """
+        color_img: Optional[np.ndarray] = None
+        info: Dict[str, Any] = {}
+        if os.environ.get("BRAILCE_COLOR_SCAN", "1") != "0":
+            color_img, info = self.color_contrast_image(image)
+
+        if color_img is None:
+            return self._scan_variant(image, strategies)
+
+        def _tag(res: Dict[str, Any], used_color: bool) -> Dict[str, Any]:
+            res["color_channel"] = dict(info, used=used_color)
+            return res
+
+        if info.get("prefer"):
+            # Grayscale cannot see these dots (same brightness as the board): a grayscale
+            # "read" would be noise, so the colour result is final, readable or not.
+            return _tag(self._scan_variant(color_img, strategies), True)
+
+        # Colourful frame where brightness also separates: both reads compete on score.
+        res_g = self._scan_variant(image, strategies)
+        res_c = self._scan_variant(color_img, strategies)
+        if self._score_result(res_c) > self._score_result(res_g):
+            return _tag(res_c, True)
+        return _tag(res_g, False)
+
+    def _scan_variant(self, image: np.ndarray, strategies: Optional[Sequence[Tuple[bool, Any]]] = None) -> Dict[str, Any]:
         """
         Decode one camera frame, handling ink-printed AND embossed Braille.
 

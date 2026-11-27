@@ -112,7 +112,8 @@ def create_deployment_bundle() -> str:
         for root, dirs, files in os.walk(brailce_dir):
             dirs[:] = [d for d in dirs if d not in ("__pycache__", "characters", "words_en", "filipino", "models")]
             for f in files:
-                if f.endswith((".py", ".json")):
+                # .ttf + licence: the LCD's bundled fonts (brailce/display/fonts/)
+                if f.endswith((".py", ".json", ".ttf")) or f.startswith("LICENSE"):
                     full = os.path.join(root, f)
                     rel = os.path.relpath(full, LOCAL_BASE)
                     tar.add(full, arcname=rel.replace("\\", "/"))

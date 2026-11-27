@@ -2,26 +2,140 @@
 Brailce ILI9488 TFT Display – Raspberry Pi (480x320 SPI)
 ==========================================================
 
-Enhanced visual display driver featuring:
-- Premium modern dark design system (Tailwind-inspired slate palette)
-- Dynamic battery percentage widget (UPS HAT ready / 100% plugged state)
-- Mode-aware header pills with vibrant accents
-- Beautiful Braille dot matrices, AI Assistant cards, and Math solution cards
-- Thread-safe SPI rendering with tear-free camera preview for Scanner Mode
+Visual display driver for the 3.5" ILI9488 / ILI9486 SPI panel.
+
+Design notes (why it looks the way it does):
+- Cheap SPI TFT panels wash out dark, low-contrast colours (navy turns into a
+  blue gradient at an angle). The palette is therefore a near-neutral dark
+  background with clearly brighter card surfaces and high-contrast text.
+- All text uses the bundled DejaVu Sans (regular + bold, free licence, see
+  fonts/LICENSE_DEJAVU.txt). It covers bullets, arrows and ellipses, so no
+  glyph renders as a "tofu" box.
+- Icons, bullets and Braille cells are drawn with shapes, never with font glyphs.
+- One accent colour per mode (header pill, card titles, Braille dots, cursor).
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import re
+import textwrap
 import threading
 import time
-from typing import Optional, Any
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from brailce.core.events import AppMode
 from brailce.display.base import DisplayDevice
 from brailce.i18n.strings import get_string, get_mode_name
 
 logger = logging.getLogger(__name__)
+
+# -----------------------------------------------------------------------------
+# Fonts
+# -----------------------------------------------------------------------------
+
+_FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+_FONT_CANDIDATES: Dict[bool, List[str]] = {
+    False: [
+        os.path.join(_FONT_DIR, "DejaVuSans.ttf"),
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",   # Raspberry Pi OS system copy
+    ],
+    True: [
+        os.path.join(_FONT_DIR, "DejaVuSans-Bold.ttf"),
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ],
+}
+
+# -----------------------------------------------------------------------------
+# Design tokens
+# -----------------------------------------------------------------------------
+
+
+class Palette:
+    BG = (9, 11, 17)
+    SURFACE = (24, 28, 39)
+    SURFACE_HI = (36, 42, 56)
+    BORDER = (46, 53, 70)
+    TEXT = (243, 246, 250)
+    TEXT_2 = (178, 188, 204)
+    TEXT_3 = (120, 131, 150)
+    DOT_OFF = (60, 68, 88)
+    DANGER = (248, 113, 113)
+    DANGER_BG = (76, 20, 26)
+    WARN = (251, 191, 36)
+    OK = (74, 222, 128)
+    STEP = (52, 211, 153)
+
+
+# (header label, accent colour)
+MODE_THEME: Dict[AppMode, Tuple[str, Tuple[int, int, int]]] = {
+    AppMode.FREE_INPUT: ("FREE INPUT", (52, 211, 153)),
+    AppMode.MATH: ("MATH MODE", (251, 191, 36)),
+    AppMode.AI_ASSISTANT: ("AI ASSISTANT", (167, 139, 250)),
+    AppMode.SCANNER: ("SCANNER", (56, 189, 248)),
+}
+
+# Screen geometry (480x320)
+HEADER_H = 40
+FOOTER_H = 30
+MARGIN = 12
+CONTENT_TOP = HEADER_H + 8          # 48
+CONTENT_BOTTOM_GAP = 8               # space between content and footer
+CARD_RADIUS = 10
+
+# Short on-screen labels (EN / FIL). Kept local to the LCD so the frozen
+# English speech/status strings in brailce.i18n.strings stay untouched.
+LCD_LABELS: Dict[str, Dict[str, str]] = {
+    "CHARACTER": {"en": "CHARACTER", "fil": "TITIK"},
+    "BRAILLE": {"en": "BRAILLE", "fil": "BRAILLE"},
+    "DOTS": {"en": "DOTS", "fil": "TULDOK"},
+    "NO_DOTS": {"en": "No dots", "fil": "Walang tuldok"},
+    "SPACE": {"en": "space", "fil": "espasyo"},
+    "TYPED": {"en": "TYPED TEXT", "fil": "NAISULAT"},
+    "SCANNED": {"en": "SCANNED TEXT", "fil": "NABASANG TEKSTO"},
+    "EQUATION": {"en": "EQUATION", "fil": "EKSPRESYON"},
+    "EMPTY_TYPED": {"en": "Type letters on the keypad to practice",
+                    "fil": "Pumindot ng titik sa keypad para magsanay"},
+    "EMPTY_SCANNED": {"en": "Nothing scanned yet", "fil": "Wala pang nababasa"},
+    "EMPTY_EQUATION": {"en": "Type a problem, e.g. 2 + 3", "fil": "Mag-type ng problema, hal. 2 + 3"},
+    "QUESTION": {"en": "YOUR QUESTION", "fil": "IYONG TANONG"},
+    "QUESTION_SHORT": {"en": "QUESTION", "fil": "TANONG"},
+    "Q_PLACEHOLDER": {"en": "Type your question on the Braille keypad",
+                      "fil": "I-type ang iyong tanong sa Braille keypad"},
+    "Q_EXAMPLES": {"en": "Try:  what is rain?  ·  tell a story",
+                   "fil": "Subukan:  ano ang ulan?  ·  magkuwento ka"},
+    "AI_ANSWER": {"en": "AI ANSWER", "fil": "SAGOT NG AI"},
+    "CONTROLS": {"en": "CONTROLS", "fil": "MGA PINDUTAN"},
+    "KEY_ASK": {"en": "Ask the AI", "fil": "Itanong sa AI"},
+    "KEY_MODE": {"en": "Switch mode", "fil": "Palit mode"},
+    "KEY_DELETE": {"en": "Delete", "fil": "Burahin"},
+    "KEY_SCAN": {"en": "Scan page", "fil": "Basahin ang pahina"},
+    "KEY_SOLVE": {"en": "Solve", "fil": "Lutasin"},
+    "MATH_INTRO_TITLE": {"en": "GRADE 1 MATH", "fil": "MATEMATIKA (GRADE 1)"},
+    "MATH_INTRO": {"en": "Type a math problem using the numbers 0 to 9.",
+                   "fil": "Mag-type ng problema gamit ang 0 hanggang 9."},
+    "EXAMPLES": {"en": "EXAMPLES", "fil": "HALIMBAWA"},
+    "SCANNER_TITLE": {"en": "Braille Scanner", "fil": "Pagbasa ng Braille"},
+    "SCANNER_TIP": {"en": "Hold the page flat, about one hand-span below the camera.",
+                    "fil": "Ihiga ang pahina, mga isang dangkal sa ilalim ng kamera."},
+    "ERROR": {"en": "Error", "fil": "Error"},
+}
+
+
+def _dots_from_unicode(ch: str) -> Optional[Set[int]]:
+    """Return the raised dots (1-6) for a Unicode Braille pattern character."""
+    if len(ch) != 1:
+        return None
+    code = ord(ch)
+    if not (0x2800 <= code <= 0x28FF):
+        return None
+    bits = code - 0x2800
+    return {i + 1 for i in range(6) if bits & (1 << i)}
+
+
+def _dots_label(dots: Set[int]) -> str:
+    return "-".join(str(d) for d in sorted(dots))
 
 
 class LgpioShim:
@@ -69,10 +183,11 @@ class NoopBacklight:
         pass
 
 
+
 class ILI9488Display(DisplayDevice):
     """
     ILI9488 SPI TFT display driver for Raspberry Pi (3.5", 480x320).
-    Renders rich UI cards, Braille dot matrices, mode indicators,
+    Renders UI cards, Braille dot cells, mode indicators,
     battery percentage, and live camera preview frames.
     """
 
@@ -86,7 +201,6 @@ class ILI9488Display(DisplayDevice):
         spi_port: int = 0,
         spi_device: int = 0,
     ) -> None:
-        import os
         self._width = width
         self._height = height
         self._current_mode: Optional[AppMode] = None
@@ -102,6 +216,9 @@ class ILI9488Display(DisplayDevice):
         self._battery_override: Optional[tuple[int, bool]] = None
         self._current_query: str = ""
         self._last_status_msg: str = "Ready"
+        # Which screen layout is currently on the canvas ("input", "math_result", ...).
+        self._layout: Optional[str] = None
+        self._math_braille_box: Optional[Tuple[int, int, int, int]] = None
 
         if fb_path:
             self._fb_path = fb_path
@@ -116,31 +233,46 @@ class ILI9488Display(DisplayDevice):
         self._image = None
         self._draw = None
         self._language = "en"
+        self._fonts: Dict[Tuple[int, bool], Any] = {}
         self._font_char = None
         self._font_title = None
         self._font_label = None
         self._font_body = None
         self._font_small = None
+        self._font_medium = None
 
-    def _load_font(self, size: int) -> Any:
+    # -------------------------------------------------------------------------
+    # Fonts
+    # -------------------------------------------------------------------------
+
+    def _f(self, size: int, bold: bool = False) -> Any:
+        """Cached TrueType font (DejaVu Sans), falling back to Pillow's default."""
+        key = (int(size), bool(bold))
+        if key in self._fonts:
+            return self._fonts[key]
+        font = None
         try:
             from PIL import ImageFont
-            candidates = [
-                os.path.join(os.path.dirname(__file__), "fonts", "BrailceDefault.ttf"),
-                os.path.join(os.path.dirname(__file__), "fonts", "DejaVuSans.ttf"),
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                "C:/Windows/Fonts/arial.ttf",
-            ]
-            for p in candidates:
-                if os.path.isfile(p):
-                    return ImageFont.truetype(p, size)
-            return ImageFont.load_default()
+            for path in _FONT_CANDIDATES[bool(bold)]:
+                if os.path.isfile(path):
+                    try:
+                        font = ImageFont.truetype(path, int(size))
+                        break
+                    except Exception:
+                        continue
+            if font is None:
+                try:
+                    font = ImageFont.load_default(size=int(size))
+                except TypeError:
+                    font = ImageFont.load_default()
         except Exception:
-            try:
-                from PIL import ImageFont
-                return ImageFont.load_default()
-            except Exception:
-                return None
+            font = None
+        self._fonts[key] = font
+        return font
+
+    def _load_font(self, size: int) -> Any:
+        """Backward-compatible alias for the regular-weight font loader."""
+        return self._f(size)
 
     @property
     def driver_name(self) -> str:
@@ -152,19 +284,21 @@ class ILI9488Display(DisplayDevice):
 
     def initialize(self) -> None:
         """Initialize direct SPI connection, framebuffer, or buffer canvas."""
-        import os
+        # 0. Pillow drawing canvas (works on every platform)
         try:
             from PIL import Image, ImageDraw
-            self._image = Image.new("RGB", (self._width, self._height), color=(11, 15, 25))
+            self._image = Image.new("RGB", (self._width, self._height), color=Palette.BG)
             self._draw = ImageDraw.Draw(self._image)
-            self._font_char = self._load_font(72)
-            self._font_title = self._load_font(20)
-            self._font_label = self._load_font(18)
-            self._font_body = self._load_font(15)
-            self._font_small = self._load_font(13)
+            self._font_char = self._f(72, True)
+            self._font_title = self._f(20, True)
+            self._font_label = self._f(14, True)
+            self._font_body = self._f(15)
+            self._font_small = self._f(13)
+            self._font_medium = self._f(15, True)
             logger.info("ILI9488Display canvas initialized (%dx%d).", self._width, self._height)
         except ImportError:
             logger.warning("Pillow not installed; running in fallback mode.")
+
 
         # 1. Attempt direct SPI communication via luma.lcd (Primary for Raspberry Pi 5)
         if os.path.exists(f"/dev/spidev{self._spi_port}.{self._spi_device}"):
@@ -287,8 +421,9 @@ class ILI9488Display(DisplayDevice):
                 except Exception as exc:
                     logger.debug("Framebuffer write error: %s", exc)
 
+
     # =========================================================================
-    # Visual Design System – Headers, Badges & Battery Widget
+    # Battery state
     # =========================================================================
 
     def _get_battery_info(self) -> tuple[int, bool]:
@@ -330,98 +465,283 @@ class ILI9488Display(DisplayDevice):
             self._draw_header(self._current_mode)
             self._flush_to_hardware()
 
+    # =========================================================================
+    # Drawing primitives
+    # =========================================================================
+
+    def _L(self, key: str) -> str:
+        entry = LCD_LABELS.get(key, {})
+        return entry.get(self._language) or entry.get("en", key)
+
+    def _accent(self, mode: Optional[AppMode] = None) -> Tuple[int, int, int]:
+        theme = MODE_THEME.get(mode if mode is not None else self._current_mode)
+        return theme[1] if theme else Palette.TEXT_2
+
+    @property
+    def _footer_y(self) -> int:
+        return self._height - FOOTER_H
+
+    @property
+    def _content_bottom(self) -> int:
+        return self._footer_y - CONTENT_BOTTOM_GAP
+
+    def _tw(self, text: str, font: Any) -> float:
+        """Rendered pixel width of a string."""
+        if font is not None and hasattr(font, "getlength"):
+            try:
+                return float(font.getlength(text))
+            except Exception:
+                pass
+        return len(text) * 7.5
+
+    def _fit(self, text: str, font: Any, max_w: float) -> str:
+        """Ellipsize text so it fits max_w pixels."""
+        if self._tw(text, font) <= max_w:
+            return text
+        ell = "…"
+        lo, hi = 0, len(text)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if self._tw(text[:mid].rstrip() + ell, font) <= max_w:
+                lo = mid
+            else:
+                hi = mid - 1
+        return text[:lo].rstrip() + ell
+
+    def _wrap(self, text: str, font: Any, max_w: float, max_lines: Optional[int] = None,
+              keep: str = "head") -> List[str]:
+        """
+        Word-wrap by pixel width. With max_lines, keep="head" ellipsizes the last
+        visible line; keep="tail" shows the newest lines (typing buffers).
+        """
+        lines: List[str] = []
+        for para in (text or "").split("\n"):
+            words = para.split(" ")
+            cur = ""
+            for word in words:
+                trial = word if not cur else f"{cur} {word}"
+                if self._tw(trial, font) <= max_w:
+                    cur = trial
+                    continue
+                if cur:
+                    lines.append(cur)
+                # hard-break words that are wider than the line
+                while self._tw(word, font) > max_w and len(word) > 1:
+                    cut = len(word)
+                    while cut > 1 and self._tw(word[:cut], font) > max_w:
+                        cut -= 1
+                    lines.append(word[:cut])
+                    word = word[cut:]
+                cur = word
+            if cur:
+                lines.append(cur)
+        if max_lines is not None and len(lines) > max_lines:
+            if keep == "tail":
+                lines = lines[-max_lines:]
+            else:
+                rest = " ".join(lines[max_lines - 1:])
+                lines = lines[: max_lines - 1] + [self._fit(rest, font, max_w)]
+        return lines
+
+    def _rrect(self, box: Sequence[float], r: int, fill: Any = None, outline: Any = None, width: int = 1) -> None:
+        x0, y0, x1, y1 = [int(round(v)) for v in box]
+        fn = getattr(self._draw, "rounded_rectangle", None)
+        if fn is not None and r > 0:
+            try:
+                fn([(x0, y0), (x1, y1)], radius=r, fill=fill, outline=outline, width=width)
+                return
+            except Exception:
+                pass
+        self._draw.rectangle([(x0, y0), (x1, y1)], fill=fill, outline=outline, width=width)
+
+    def _circle(self, cx: float, cy: float, r: float, fill: Any = None, outline: Any = None, width: int = 1) -> None:
+        self._draw.ellipse([(cx - r, cy - r), (cx + r, cy + r)], fill=fill, outline=outline, width=width)
+
+    def _text(self, xy: Tuple[float, float], s: str, size: int = 15, bold: bool = False,
+              fill: Any = Palette.TEXT) -> None:
+        self._draw.text((int(xy[0]), int(xy[1])), s, font=self._f(size, bold), fill=fill)
+
+    def _text_center(self, cx: float, cy: float, s: str, size: int, bold: bool = False,
+                     fill: Any = Palette.TEXT) -> None:
+        """Draw text with its ink box centred on (cx, cy)."""
+        font = self._f(size, bold)
+        l = t = 0.0
+        r, b = self._tw(s, font), float(size)
+        if font is not None and hasattr(font, "getbbox"):
+            try:
+                l, t, r, b = font.getbbox(s)
+            except Exception:
+                pass
+        self._draw.text((int(cx - (l + r) / 2), int(cy - (t + b) / 2)), s, font=font, fill=fill)
+
+    def _polygon(self, pts: Sequence[Tuple[float, float]], fill: Any) -> None:
+        fn = getattr(self._draw, "polygon", None)
+        if fn is not None:
+            fn([(int(x), int(y)) for x, y in pts], fill=fill)
+
+    def _clear_content(self) -> None:
+        self._draw.rectangle([(0, HEADER_H + 1), (self._width, self._footer_y - 1)], fill=Palette.BG)
+
+    def _card(self, box: Sequence[float], title: Optional[str] = None,
+              title_color: Any = None, fill: Any = Palette.SURFACE) -> int:
+        """Rounded surface card with an optional small caption. Returns the content top y."""
+        x0, y0, x1, y1 = box
+        self._rrect(box, CARD_RADIUS, fill=fill)
+        if title:
+            accent = title_color or Palette.TEXT_3
+            self._rrect((x0 + 14, y0 + 12, x0 + 17, y0 + 23), 1, fill=accent)
+            self._text((x0 + 24, y0 + 10), title, size=11, bold=True, fill=accent)
+            return int(y0 + 32)
+        return int(y0 + 12)
+
+    def _key_chip(self, x: float, y: float, key: str, label: str) -> float:
+        """Keycap-style hint: [ENTER] Ask the AI. Returns x after the chip."""
+        fk = self._f(11, True)
+        kw = self._tw(key, fk) + 14
+        self._rrect((x, y, x + kw, y + 20), 5, fill=Palette.SURFACE_HI, outline=Palette.BORDER)
+        self._text_center(x + kw / 2, y + 10, key, 11, True, Palette.TEXT)
+        self._text((x + kw + 7, y + 2), label, size=13, fill=Palette.TEXT_2)
+        return x + kw + 7 + self._tw(label, self._f(13)) + 18
+
+    def _key_chips(self, x0: float, y: float, x_max: float, items: Iterable[Tuple[str, str]],
+                   line_h: int = 26) -> float:
+        """Lay out key chips left-to-right, wrapping to a new row when needed. Returns next y."""
+        x = x0
+        for key, label in items:
+            need = self._tw(key, self._f(11, True)) + 14 + 7 + self._tw(label, self._f(13))
+            if x > x0 and x + need > x_max:
+                x = x0
+                y += line_h
+            x = self._key_chip(x, y, key, label)
+        return y + line_h
+
+    def _braille_cell(self, x: float, y: float, dots: Set[int], pitch: float, r: float,
+                      on: Any, numbers: bool = False) -> None:
+        """Draw one 2x3 Braille cell; (x, y) is the centre of dot 1."""
+        for n in range(1, 7):
+            col = 0 if n <= 3 else 1
+            row = (n - 1) % 3
+            cx, cy = x + col * pitch, y + row * pitch
+            if n in dots:
+                self._circle(cx, cy, r, fill=on)
+            else:
+                self._circle(cx, cy, r, outline=Palette.DOT_OFF, width=2 if r >= 6 else 1)
+            if numbers:
+                nx = cx - r - 9 if col == 0 else cx + r + 9
+                self._text_center(nx, cy, str(n), 10, False, Palette.TEXT_3)
+
+    def _braille_row(self, cells: List[Set[int]], box: Sequence[float], on: Any,
+                     numbers: bool = False) -> None:
+        """Centre a row of Braille cells inside box, scaling them to fit."""
+        x0, y0, x1, y1 = box
+        n = max(1, len(cells))
+        avail_w, avail_h = (x1 - x0), (y1 - y0)
+        pitch = min(26.0, (avail_h - 4) / 2.6)
+        while pitch > 6:
+            r = pitch * 0.36
+            cell_w = pitch + 2 * r
+            gap = pitch * 0.9
+            total = n * cell_w + (n - 1) * gap + (34 if numbers else 0)
+            if total <= avail_w:
+                break
+            pitch -= 1
+        r = pitch * 0.36
+        cell_w = pitch + 2 * r
+        gap = pitch * 0.9
+        total = n * cell_w + (n - 1) * gap
+        sx = x0 + (avail_w - total) / 2 + r
+        sy = y0 + (avail_h - (2 * pitch + 2 * r)) / 2 + r
+        for i, dots in enumerate(cells):
+            self._braille_cell(sx + i * (cell_w + gap), sy, dots, pitch, r, on, numbers=numbers)
+
+    # =========================================================================
+    # Header, battery, footer
+    # =========================================================================
+
     def _draw_header(self, mode: AppMode) -> None:
-        """
-        Render a modern, sleek top header bar:
-        - Mode Pill Badge with vibrant color accent
-        - Device Branding '✦ BRAILCE'
-        - Battery Indicator Widget with percentage and charging icon
-        """
+        """Top bar: mode pill (left), wordmark (centre), battery (right)."""
         if not self._draw:
             return
+        label, accent = MODE_THEME.get(mode, ("BRAILCE", Palette.TEXT_2))
+        self._draw.rectangle([(0, 0), (self._width, HEADER_H)], fill=Palette.BG)
+        self._draw.line([(0, HEADER_H), (self._width, HEADER_H)], fill=Palette.BORDER, width=1)
 
-        # Header background (deep slate navy #0F172A)
-        self._draw.rectangle([(0, 0), (self._width, 46)], fill=(15, 23, 42))
+        # Mode pill
+        pill_font = self._f(13, True)
+        pill_w = self._tw(label, pill_font) + 28
+        self._rrect((MARGIN, 9, MARGIN + pill_w, 31), 11, fill=accent)
+        self._text_center(MARGIN + pill_w / 2, 20, label, 13, True, Palette.BG)
 
-        # Mode styling parameters (badge_bg, outline_color, text_color, title)
-        mode_meta = {
-            AppMode.FREE_INPUT: ((6, 78, 59), (16, 185, 129), (52, 211, 153), "FREE INPUT"),
-            AppMode.MATH: ((120, 53, 15), (245, 158, 11), (251, 191, 36), "MATH MODE"),
-            AppMode.AI_ASSISTANT: ((91, 33, 182), (139, 92, 246), (192, 132, 252), "AI ASSISTANT"),
-            AppMode.SCANNER: ((21, 94, 117), (6, 182, 212), (56, 189, 248), "SCANNER"),
-        }
-        badge_bg, accent_color, text_color, badge_text = mode_meta.get(
-            mode, ((55, 65, 81), (156, 163, 175), (255, 255, 255), "BRAILCE")
-        )
+        # Wordmark
+        self._text_center(self._width / 2, 20, "BRAILCE", 14, True, Palette.TEXT_2)
 
-        # 2px bottom accent line matching mode
-        self._draw.line([(0, 45), (self._width, 45)], fill=accent_color, width=2)
+        self._draw_battery()
 
-        # 1. Left: Mode pill badge
-        pill_w = 148
-        self._draw.rectangle([(12, 10), (12 + pill_w, 36)], fill=badge_bg, outline=accent_color, width=1)
-        self._draw.text((22, 14), badge_text, font=self._font_label or None, fill=text_color)
-
-        # 2. Center: Brand Logo
-        self._draw.text((200, 14), "BRAILCE", font=self._font_title or None, fill=(255, 255, 255))
-
-        # 3. Right: Phone-style Real-Time Battery Indicator Widget
+    def _draw_battery(self) -> None:
         pct, is_charging = self._get_battery_info()
-        batt_x, batt_y = 382, 15
-        batt_w, batt_h = 30, 15
+        font = self._f(13, True)
+        known = self._battery_known()
+        label = "--" if not known else (f"{pct}%+" if is_charging else f"{pct}%")
+        tw = self._tw(label, font)
+        tx = self._width - MARGIN - tw
+        bw, bh = 26, 13
+        bx1 = tx - 9
+        bx0 = bx1 - bw
+        by0 = 20 - bh / 2
+        by1 = by0 + bh
 
-        if not self._battery_known():
-            # No battery sensor readable (e.g. UPS board without I2C/sysfs fuel gauge):
-            # show "--" instead of a fabricated 100%.
-            grey = (100, 116, 139)
-            self._draw.rectangle([(batt_x, batt_y), (batt_x + batt_w, batt_y + batt_h)], outline=grey, width=1)
-            self._draw.rectangle([(batt_x + batt_w, batt_y + 4), (batt_x + batt_w + 3, batt_y + batt_h - 4)], fill=grey)
-            self._draw.text((batt_x + batt_w + 7, batt_y + 1), "--", font=self._font_small or None, fill=grey)
-            return
-
-        if is_charging:
-            batt_color = (56, 189, 248)   # Bright Sky Blue when charging
+        if not known:
+            color = Palette.TEXT_3
+        elif is_charging:
+            color = (56, 189, 248)
         elif pct > 20:
-            batt_color = (16, 185, 129)   # Emerald Green
+            color = Palette.OK
         else:
-            batt_color = (239, 68, 68)    # Alert Red
+            color = (239, 68, 68)
 
-        # Battery body outline + positive terminal cap
-        self._draw.rectangle([(batt_x, batt_y), (batt_x + batt_w, batt_y + batt_h)], outline=batt_color, width=1)
-        self._draw.rectangle([(batt_x + batt_w + 1, batt_y + 4), (batt_x + batt_w + 3, batt_y + batt_h - 4)], fill=batt_color)
+        self._rrect((bx0, by0, bx1, by1), 3, outline=color, width=2)
+        self._draw.rectangle([(bx1 + 1, by0 + 4), (bx1 + 3, by1 - 4)], fill=color)
+        if known:
+            fill_w = max(2, int((bw - 6) * (pct / 100.0)))
+            self._draw.rectangle([(bx0 + 3, by0 + 3), (bx0 + 3 + fill_w, by1 - 3)], fill=color)
+            if is_charging:
+                cx = (bx0 + bx1) / 2
+                self._polygon(
+                    [(cx + 2, by0 - 1), (cx - 5, 20 + 1), (cx - 0.5, 20 + 1),
+                     (cx - 2, by1 + 1), (cx + 5, 20 - 1), (cx + 0.5, 20 - 1)],
+                    fill=Palette.TEXT,
+                )
+        self._text_center(tx + tw / 2, 20, label, 13, True, Palette.TEXT if known else Palette.TEXT_3)
 
-        # Exact fill level inside battery
-        fill_w = max(2, int((batt_w - 4) * (pct / 100.0)))
-        self._draw.rectangle([(batt_x + 2, batt_y + 2), (batt_x + 2 + fill_w, batt_y + batt_h - 2)], fill=batt_color)
-
-        # Crisp lightning bolt overlay when charging
-        if is_charging and hasattr(self._draw, "line"):
-            bx, by = batt_x + batt_w // 2, batt_y + 2
-            self._draw.line([(bx + 2, by), (bx - 2, by + 5), (bx + 2, by + 5), (bx - 2, by + 11)], fill=(255, 255, 255), width=1)
-
-        # Exact percentage text (e.g. "87%" or "87%+")
-        batt_label = f"{pct}%" if not is_charging else f"{pct}%+"
-        self._draw.text((batt_x + batt_w + 7, batt_y + 1), batt_label, font=self._font_small or None, fill=(248, 250, 252))
+    def _draw_footer(self, message: str, dot: Any = None, bg: Any = Palette.BG,
+                     fg: Any = Palette.TEXT_2) -> None:
+        fy = self._footer_y
+        self._draw.rectangle([(0, fy), (self._width, self._height)], fill=bg)
+        self._draw.line([(0, fy), (self._width, fy)], fill=Palette.BORDER, width=1)
+        cy = fy + FOOTER_H / 2
+        self._circle(MARGIN + 6, cy, 4, fill=dot or self._accent())
+        font = self._f(13)
+        msg = self._fit(str(message), font, self._width - MARGIN * 2 - 20)
+        self._text_center(MARGIN + 20 + self._tw(msg, font) / 2, cy, msg, 13, False, fg)
 
     # =========================================================================
     # Operating Modes Rendering
     # =========================================================================
 
     def show_mode(self, mode: AppMode) -> None:
-        """Switch mode and draw initial layout."""
+        """Switch mode and draw its start screen."""
         self._current_mode = mode
         self._current_query = ""
+        self._layout = None
         if not self._draw:
             return
 
-        # Clear background to deep midnight canvas (#0B0F19)
-        self._draw.rectangle([(0, 0), (self._width, self._height)], fill=(11, 15, 25))
+        self._draw.rectangle([(0, 0), (self._width, self._height)], fill=Palette.BG)
         self._draw_header(mode)
 
-        # Initial guidance card based on mode
         if mode == AppMode.FREE_INPUT:
-            self.show_character(" ")
-            self.show_text_buffer("")
+            self._ensure_input_layout(force=True)
+            self.show_status(get_string("FREE_INPUT_STATUS", self._language, count=0))
         elif mode == AppMode.MATH:
             self._draw_math_welcome()
         elif mode == AppMode.AI_ASSISTANT:
@@ -431,68 +751,157 @@ class ILI9488Display(DisplayDevice):
 
         self._flush_to_hardware()
 
-    def _draw_math_welcome(self) -> None:
-        """Math mode starting card."""
-        self._draw.rectangle([(15, 56), (465, 276)], fill=(15, 23, 42), outline=(245, 158, 11), width=2)
-        self._draw.text((30, 72), "GRADE 1 ARITHMETIC TUTOR:", fill=(251, 191, 36))
-        self._draw.text((30, 105), "Type a single-digit math problem (0 to 9)", fill=(255, 255, 255))
-        self._draw.text((30, 135), "Examples:  2 + 3   |   7 - 4   |   5 + 5", fill=(148, 163, 184))
-        self._draw.text((30, 180), "• Press ENTER to calculate and hear counting steps", fill=(203, 213, 225))
-        self._draw.text((30, 210), "• Press CLEAR to reset equation buffer", fill=(148, 163, 184))
-        self.show_status(get_string("MATH_STATUS_READY", self._language))
+    # -------------------------------------------------------------------------
+    # Free Input / typing layout (also used by Math typing and Scanner readout)
+    # -------------------------------------------------------------------------
 
-    # -------------------------------------------------------------------------
-    # Free Input Mode
-    # -------------------------------------------------------------------------
+    def _boxes(self) -> Dict[str, Tuple[int, int, int, int]]:
+        w = self._width
+        top = CONTENT_TOP
+        mid = top + 150
+        return {
+            "char": (MARGIN, top, MARGIN + 156, mid),
+            "braille": (MARGIN + 164, top, w - MARGIN, mid),
+            "text": (MARGIN, mid + 8, w - MARGIN, self._content_bottom),
+        }
+
+    def _ensure_input_layout(self, force: bool = False) -> None:
+        """Draw the three typing cards when another screen is on the canvas."""
+        if self._layout == "input" and not force:
+            return
+        self._layout = "input"
+        self._clear_content()
+        self._draw_char_card(None)
+        self._draw_braille_card([], "")
+        self._draw_text_card("")
+
+    def _draw_char_card(self, character: Optional[str]) -> None:
+        box = self._boxes()["char"]
+        x0, y0, x1, y1 = box
+        top = self._card(box, self._L("CHARACTER"), self._accent())
+        cx, cy = (x0 + x1) / 2, (top + y1) / 2 - 2
+        inner_w = (x1 - x0) - 24
+
+        if character is None:
+            self._text_center(cx, cy, "–", 40, True, Palette.DOT_OFF)
+            return
+
+        stripped = character.strip()
+        if not stripped:
+            # Space: drawn as a little space-bar so it never looks empty
+            self._draw.line([(cx - 34, cy + 6), (cx - 34, cy + 14), (cx + 34, cy + 14), (cx + 34, cy + 6)],
+                            fill=Palette.TEXT_2, width=3)
+            self._text_center(cx, cy - 16, self._L("SPACE"), 18, True, Palette.TEXT_2)
+            return
+
+        # "5 (from e)" / "# (Number Sign)" -> big symbol + small caption
+        m = re.match(r"^(\S{1,2})\s+\((.+)\)$", stripped)
+        if m:
+            self._text_center(cx, cy - 12, m.group(1), 60, True, Palette.TEXT)
+            cap = self._fit(m.group(2), self._f(12), inner_w)
+            self._text_center(cx, y1 - 18, cap, 12, False, Palette.TEXT_3)
+            return
+
+        if len(stripped) <= 2:
+            self._text_center(cx, cy, stripped, 76 if len(stripped) == 1 else 56, True, Palette.TEXT)
+            return
+
+        # Word labels ("Backspace", "[ Cleared ]", ...)
+        font = self._f(20, True)
+        lines = self._wrap(stripped, font, inner_w, max_lines=3)
+        lh = 24
+        y = cy - (len(lines) * lh) / 2 + lh / 2
+        for line in lines:
+            self._text_center(cx, y, line, 20, True, Palette.TEXT)
+            y += lh
+
+    def _parse_cells(self, unicode_char: str, dots_string: str) -> List[Set[int]]:
+        cells = [_dots_from_unicode(c) for c in (unicode_char or "")]
+        if unicode_char and all(c is not None for c in cells):
+            return [c for c in cells if c is not None]
+        # Fallback: "Dots 1-2-3" / "Dot 2 Dots 2-5-6" / "1" / "No dots"
+        groups = re.findall(r"[1-6](?:-[1-6])*", dots_string or "")
+        if not groups:
+            return [set()]
+        return [{int(d) for d in g.split("-")} for g in groups]
+
+    def _draw_braille_card(self, cells: List[Set[int]], dots_text: str) -> None:
+        box = self._boxes()["braille"]
+        x0, y0, x1, y1 = box
+        accent = self._accent()
+        top = self._card(box, self._L("BRAILLE"), accent)
+
+        split = x0 + 150
+        cells_to_draw = cells[:5] if cells else [set()]
+        self._braille_row(cells_to_draw, (x0 + 12, top - 4, split, y1 - 12), accent,
+                          numbers=len(cells_to_draw) == 1)
+
+        # Divider + dots description on the right
+        self._draw.line([(split + 6, top + 4), (split + 6, y1 - 16)], fill=Palette.BORDER, width=1)
+        tx = split + 20
+        self._text((tx, top + 6), self._L("DOTS"), size=11, bold=True, fill=Palette.TEXT_3)
+        if not dots_text:
+            dots_text = "–" if not cells else " | ".join(_dots_label(c) for c in cells if c) or self._L("NO_DOTS")
+        font = self._f(17, True)
+        y = top + 26
+        for line in self._wrap(dots_text, font, x1 - tx - 12, max_lines=3):
+            self._text((tx, y), line, size=17, bold=True, fill=Palette.TEXT)
+            y += 23
+
+    def _draw_text_card(self, text: str) -> None:
+        box = self._boxes()["text"]
+        x0, y0, x1, y1 = box
+        mode = self._current_mode
+        if mode == AppMode.SCANNER:
+            label, empty = self._L("SCANNED"), self._L("EMPTY_SCANNED")
+        elif mode == AppMode.MATH:
+            label, empty = self._L("EQUATION"), self._L("EMPTY_EQUATION")
+        else:
+            label, empty = self._L("TYPED"), self._L("EMPTY_TYPED")
+        top = self._card(box, label, self._accent())
+
+        if not text:
+            self._text((x0 + 16, top + 4), empty, size=15, fill=Palette.TEXT_3)
+            return
+
+        # Typed content renders in lowercase at the display layer (all modes).
+        font = self._f(19)
+        max_w = (x1 - x0) - 40
+        lines = self._wrap(text.lower(), font, max_w, max_lines=2, keep="tail") or [""]
+        y = top + 1
+        for line in lines:
+            self._text((x0 + 16, y), line, size=19, fill=Palette.TEXT)
+            y += 24
+        # Cursor after the last character
+        cx = x0 + 16 + self._tw(lines[-1], font) + 3
+        cy0 = y - 24 + 2
+        self._draw.rectangle([(cx, cy0), (cx + 2, cy0 + 20)], fill=self._accent())
 
     def show_character(self, character: str) -> None:
-        if not self._draw:
-            return
-        if self._current_mode == AppMode.AI_ASSISTANT:
-            return
-
-        # Character card (Top Left)
-        self._draw.rectangle([(15, 56), (195, 175)], fill=(15, 23, 42), outline=(16, 185, 129), width=1)
-        self._draw.text((25, 64), "ACTIVE CHARACTER:", font=self._font_small or None, fill=(52, 211, 153))
-        display_char = character if character.strip() else "[Space]"
-        if display_char == "[Space]":
-            self._draw.text((35, 105), display_char, font=self._font_title or None, fill=(255, 255, 255))
-        else:
-            self._draw.text((75, 82), display_char, font=self._font_char or None, fill=(255, 255, 255))
-        self._flush_to_hardware()
-
-    def show_braille(
-        self, unicode_char: str, dots_string: str, dots_visual: str
-    ) -> None:
         if not self._draw or self._current_mode == AppMode.AI_ASSISTANT:
             return
-        import re
+        self._ensure_input_layout()
+        self._draw_char_card(character)
+        self._flush_to_hardware()
 
-        # Braille cell card (Top Right)
-        self._draw.rectangle([(205, 56), (465, 175)], fill=(15, 23, 42), outline=(16, 185, 129), width=1)
-        self._draw.text((215, 68), f"BRAILLE: {unicode_char}", fill=(255, 255, 255))
-        dots_label = dots_string[5:] if dots_string.startswith("Dots ") else dots_string  # scanner passes "Dots 1-2-3"
-        self._draw.text((215, 96), f"Dots: {dots_label[:20]}", fill=(148, 163, 184))
+    def show_braille(self, unicode_char: str, dots_string: str, dots_visual: str) -> None:
+        if not self._draw or self._current_mode == AppMode.AI_ASSISTANT:
+            return
+        cells = self._parse_cells(unicode_char, dots_string)
 
-        # Render 6-dot matrix cell (2x3)
-        cell_x, cell_y = 400, 78
-        dot_r = 7
-        dot_dx, dot_dy = 22, 22
-        coords = {
-            1: (cell_x, cell_y),
-            2: (cell_x, cell_y + dot_dy),
-            3: (cell_x, cell_y + 2 * dot_dy),
-            4: (cell_x + dot_dx, cell_y),
-            5: (cell_x + dot_dx, cell_y + dot_dy),
-            6: (cell_x + dot_dx, cell_y + 2 * dot_dy),
-        }
-        active_dots = set(int(d) for d in re.findall(r'\b[1-6]\b', dots_string))
-        for dot_num, (cx, cy) in coords.items():
-            if dot_num in active_dots:
-                self._draw.ellipse([(cx - dot_r, cy - dot_r), (cx + dot_r, cy + dot_r)], fill=(251, 191, 36))
-            else:
-                self._draw.ellipse([(cx - dot_r, cy - dot_r), (cx + dot_r, cy + dot_r)], outline=(71, 85, 105), width=2)
+        if self._layout == "math_result" and self._math_braille_box:
+            self._draw_math_braille(cells)
+            self._flush_to_hardware()
+            return
 
+        self._ensure_input_layout()
+        raw = dots_string or ""
+        label = raw[5:] if raw.startswith("Dots ") else raw  # scanner passes "Dots 1-2-3"
+        if len(cells) > 1 or re.search(r"Dots?\s", label):
+            label = " | ".join(_dots_label(c) for c in cells if c) or self._L("NO_DOTS")
+        if raw.strip().lower() in ("no dots", "") and not any(cells):
+            label = self._L("NO_DOTS")
+        self._draw_braille_card(cells, label)
         self._flush_to_hardware()
 
     def show_text_buffer(self, text: str) -> None:
@@ -501,29 +910,12 @@ class ILI9488Display(DisplayDevice):
         if self._current_mode == AppMode.AI_ASSISTANT:
             self.show_ai_query_input(text)
             return
-
-        import textwrap
-        # Buffer card (Bottom)
-        self._draw.rectangle([(15, 185), (465, 276)], fill=(15, 23, 42), outline=(51, 65, 85), width=1)
-        is_scanner = self._current_mode == AppMode.SCANNER
-        label = "SCANNED TEXT:" if is_scanner else "ACCUMULATED SENTENCE BUFFER:"
-        self._draw.text((25, 195), label, fill=(148, 163, 184))
-
-        # Typed content renders in lowercase at the display layer so every
-        # mode benefits; the empty-state placeholder is a label and stays as-is.
-        buf_display = text.lower() if text else "(Empty - type letters to practice)"
-        lines = textwrap.wrap(buf_display, width=44)
-        y = 220
-        for line in lines[:2]:
-            self._draw.text((25, y), line, fill=(255, 255, 255))
-            y += 20
-
-        # Cursor
-        if text:
-            cx = min(440, 25 + len(lines[-1]) * 8) if lines else 25  # all-space buffer wraps to []
-            self._draw.rectangle([(cx, y - 18), (cx + 5, y - 4)], fill=(251, 191, 36))
-
-        if not is_scanner:  # the Space/Enter hint belongs to Free Input, not to scanned text
+        self._ensure_input_layout()
+        self._draw_text_card(text)
+        if self._current_mode == AppMode.MATH:
+            self.show_status(get_string("MATH_STATUS_READY", self._language))
+        elif self._current_mode != AppMode.SCANNER:
+            # the Space/Enter hint belongs to Free Input, not to scanned text
             self.show_status(get_string("FREE_INPUT_STATUS", self._language, count=len(text)))
         self._flush_to_hardware()
 
@@ -532,95 +924,104 @@ class ILI9488Display(DisplayDevice):
     # -------------------------------------------------------------------------
 
     def show_ai_query_input(self, query: str) -> None:
-        """Render modern AI query input card with golden cursor."""
+        """Question card with live text + cursor, and a controls card."""
         if not self._draw:
             return
-        import textwrap
-        # Typed query content renders lowercase (display layer, all modes).
-        query = (query or "").lower()
+        query = (query or "").lower()  # typed query renders lowercase
         self._current_query = query
+        self._layout = "ai_input"
+        accent = self._accent(AppMode.AI_ASSISTANT)
+        w = self._width
 
-        # Clear working canvas
-        self._draw.rectangle([(0, 47), (self._width, self._height - 35)], fill=(11, 15, 25))
-
-        # Question card (Top)
-        self._draw.rectangle([(15, 56), (465, 170)], fill=(15, 23, 42), outline=(139, 92, 246), width=2)
-        self._draw.text((25, 66), "YOUR QUESTION (AI ASSISTANT):", fill=(192, 132, 252))
-
+        self._clear_content()
+        qbox = (MARGIN, CONTENT_TOP, w - MARGIN, CONTENT_TOP + 150)
+        top = self._card(qbox, self._L("QUESTION"), accent)
         if query:
-            lines = textwrap.wrap(query, width=44)
-            y = 96
-            for line in lines[:3]:
-                self._draw.text((25, y), line, fill=(255, 255, 255))
-                y += 22
-            cx = min(440, 25 + len(lines[-1]) * 8) if lines else 25  # all-space buffer wraps to []
-            self._draw.rectangle([(cx, y - 20), (cx + 6, y - 4)], fill=(251, 191, 36))
+            font = self._f(19)
+            lines = self._wrap(query, font, (qbox[2] - qbox[0]) - 40, max_lines=4, keep="tail") or [""]
+            y = top + 2
+            for line in lines:
+                self._text((qbox[0] + 16, y), line, size=19, fill=Palette.TEXT)
+                y += 26
+            cx = qbox[0] + 16 + self._tw(lines[-1], font) + 3
+            self._draw.rectangle([(cx, y - 26 + 2), (cx + 2, y - 26 + 22)], fill=accent)
         else:
-            self._draw.text((25, 102), "Type your question on the Braille keypad...", fill=(100, 116, 139))
-            self._draw.text((25, 128), "Examples: WHAT IS RAIN?  |  TELL A STORY", fill=(71, 85, 105))
+            self._text((qbox[0] + 16, top + 8), self._L("Q_PLACEHOLDER"), size=16, fill=Palette.TEXT_2)
+            self._text((qbox[0] + 16, top + 40), self._L("Q_EXAMPLES"), size=14, fill=Palette.TEXT_3)
 
-        # Helper card (Bottom)
-        self._draw.rectangle([(15, 180), (465, 276)], fill=(15, 23, 42), outline=(51, 65, 85), width=1)
-        self._draw.text((25, 192), "CONTROLS & HINTS:", fill=(251, 191, 36))
-        self._draw.text((25, 216), "• Press ENTER to ask the AI", fill=(203, 213, 225))
-        self._draw.text((25, 240), "• Press TAB to cycle modes | BACKSPACE to delete", fill=(148, 163, 184))
+        hbox = (MARGIN, qbox[3] + 8, w - MARGIN, self._content_bottom)
+        htop = self._card(hbox, self._L("CONTROLS"))
+        self._key_chips(hbox[0] + 16, htop - 2, hbox[2] - 12, [
+            ("ENTER", self._L("KEY_ASK")),
+            ("BKSP", self._L("KEY_DELETE")),
+            ("TAB", self._L("KEY_MODE")),
+        ])
 
         self.show_status(get_string("AI_STATUS_PROMPT", self._language, count=len(query)))
         self._flush_to_hardware()
 
     def show_ai_processing(self, query: Optional[str] = None) -> None:
-        """Render prominent purple neural inference loading card."""
+        """Question recap and a 'thinking' card."""
         if not self._draw:
             return
-        import textwrap
+        self._layout = "ai_busy"
+        accent = self._accent(AppMode.AI_ASSISTANT)
+        w = self._width
+        self._clear_content()
 
-        self._draw.rectangle([(0, 47), (self._width, self._height - 35)], fill=(11, 15, 25))
-
-        # Question header
-        self._draw.rectangle([(15, 56), (465, 130)], fill=(15, 23, 42), outline=(139, 92, 246), width=1)
-        self._draw.text((25, 66), "QUESTION:", fill=(192, 132, 252))
+        qbox = (MARGIN, CONTENT_TOP, w - MARGIN, CONTENT_TOP + 76)
+        top = self._card(qbox, self._L("QUESTION_SHORT"))
         q_text = (query or (self._current_query or "...")).lower()
-        q_lines = textwrap.wrap(q_text, width=44)
-        for i, line in enumerate(q_lines[:2]):
-            self._draw.text((25, 88 + i * 18), line, fill=(255, 255, 255))
+        font = self._f(16)
+        for i, line in enumerate(self._wrap(q_text, font, (qbox[2] - qbox[0]) - 32, max_lines=2)):
+            self._text((qbox[0] + 16, top + i * 20), line, size=16, fill=Palette.TEXT)
 
-        # Processing card
-        self._draw.rectangle([(15, 140), (465, 276)], fill=(24, 16, 48), outline=(168, 85, 247), width=2)
-        self._draw.text((30, 160), "⚡ " + get_string("AI_THINKING_INDICATOR", self._language), fill=(251, 191, 36))
-        self._draw.text((30, 192), get_string("AI_THINKING_SUBTEXT", self._language), fill=(226, 232, 240))
-        # Gradient progress bar
-        self._draw.rectangle([(30, 226), (450, 244)], fill=(15, 23, 42), outline=(139, 92, 246))
-        self._draw.rectangle([(30, 226), (360, 244)], fill=(168, 85, 247))
+        box = (MARGIN, qbox[3] + 8, w - MARGIN, self._content_bottom)
+        x0, y0, x1, y1 = box
+        self._rrect(box, CARD_RADIUS, fill=Palette.SURFACE)
+        # Three "thinking" dots
+        for i, shade in enumerate((1.0, 0.65, 0.35)):
+            col = tuple(int(Palette.SURFACE[k] + (accent[k] - Palette.SURFACE[k]) * shade) for k in range(3))
+            self._circle(x0 + 26 + i * 18, y0 + 32, 6, fill=col)
+        self._text((x0 + 86, y0 + 20), get_string("AI_THINKING_INDICATOR", self._language),
+                   size=18, bold=True, fill=accent)
+        sub = get_string("AI_THINKING_SUBTEXT", self._language)
+        sy = y0 + 58
+        for line in self._wrap(sub, self._f(14), (x1 - x0) - 32, max_lines=2):
+            self._text((x0 + 16, sy), line, size=14, fill=Palette.TEXT_2)
+            sy += 19
+        # Indeterminate progress bar
+        by = y1 - 26
+        self._rrect((x0 + 16, by, x1 - 16, by + 8), 4, fill=Palette.SURFACE_HI)
+        self._rrect((x0 + 16, by, x0 + 16 + (x1 - x0 - 32) * 0.62, by + 8), 4, fill=accent)
 
         self._flush_to_hardware()
 
     def show_ai_response(self, response: str, query: Optional[str] = None) -> None:
-        """Render crisp Q&A card with multi-line answer."""
+        """Compact question line and a large answer card."""
         if not self._draw:
             return
-        import textwrap
+        self._layout = "ai_answer"
+        accent = self._accent(AppMode.AI_ASSISTANT)
+        w = self._width
+        self._clear_content()
 
-        self._draw.rectangle([(0, 47), (self._width, self._height - 35)], fill=(11, 15, 25))
-
-        # Question summary (Top)
-        self._draw.rectangle([(15, 56), (465, 116)], fill=(15, 23, 42), outline=(71, 85, 105), width=1)
-        self._draw.text((25, 64), "QUESTION:", fill=(148, 163, 184))
+        qbox = (MARGIN, CONTENT_TOP, w - MARGIN, CONTENT_TOP + 52)
+        top = self._card(qbox, self._L("QUESTION_SHORT"))
         q_text = query or self._current_query
-        if q_text:
-            self._draw.text((25, 84), q_text.lower()[:48], fill=(255, 255, 255))
-        else:
-            self._draw.text((25, 84), "(Student Query)", fill=(203, 213, 225))
+        q_line = q_text.lower() if q_text else "(Student Query)"
+        self._text((qbox[0] + 16, top - 4), self._fit(q_line, self._f(15), (qbox[2] - qbox[0]) - 32),
+                   size=15, fill=Palette.TEXT)
 
-        # AI Answer card (Bottom)
-        self._draw.rectangle([(15, 126), (465, 276)], fill=(15, 23, 42), outline=(6, 182, 212), width=2)
-        self._draw.text((25, 136), "AI ANSWER:", fill=(34, 211, 238))
-
-        lines = textwrap.wrap(response, width=42)
-        y = 162
-        font_txt = self._font_body or self._font_small or None
-        for line in lines[:5]:
-            self._draw.text((25, y), line, font=font_txt, fill=(255, 255, 255))
-            y += 22
+        abox = (MARGIN, qbox[3] + 8, w - MARGIN, self._content_bottom)
+        atop = self._card(abox, self._L("AI_ANSWER"), accent)
+        font = self._f(16)
+        lh = 21
+        max_lines = max(1, int((abox[3] - 8 - atop) // lh))
+        y = atop
+        for line in self._wrap(response or "", font, (abox[2] - abox[0]) - 32, max_lines=max_lines):
+            self._text((abox[0] + 16, y), line, size=16, fill=Palette.TEXT)
+            y += lh
 
         self.show_status(get_string("AI_STATUS_COMPLETE", self._language))
         self._flush_to_hardware()
@@ -632,6 +1033,32 @@ class ILI9488Display(DisplayDevice):
     def set_language(self, language: str) -> None:
         self._language = "fil" if (language or "en").lower() == "fil" else "en"
 
+    def _draw_math_welcome(self) -> None:
+        """Math mode start screen: short intro, example chips, key hints."""
+        self._layout = "math_welcome"
+        accent = self._accent(AppMode.MATH)
+        self._clear_content()
+        box = (MARGIN, CONTENT_TOP, self._width - MARGIN, self._content_bottom)
+        x0, y0, x1, y1 = box
+        top = self._card(box, self._L("MATH_INTRO_TITLE"), accent)
+        self._text((x0 + 16, top + 2), self._L("MATH_INTRO"), size=16, fill=Palette.TEXT)
+
+        self._text((x0 + 16, top + 40), self._L("EXAMPLES"), size=11, bold=True, fill=Palette.TEXT_3)
+        x = x0 + 16
+        ey = top + 58
+        for ex in ("2 + 3", "7 - 4", "5 + 5"):
+            ew = self._tw(ex, self._f(20, True)) + 28
+            self._rrect((x, ey, x + ew, ey + 38), 8, fill=Palette.SURFACE_HI)
+            self._text_center(x + ew / 2, ey + 19, ex, 20, True, accent)
+            x += ew + 10
+
+        self._key_chips(x0 + 16, y1 - 34, x1 - 12, [
+            ("ENTER", self._L("KEY_SOLVE")),
+            ("BKSP", self._L("KEY_DELETE")),
+            ("TAB", self._L("KEY_MODE")),
+        ])
+        self.show_status(get_string("MATH_STATUS_READY", self._language))
+
     def show_math_result(
         self,
         equation: str,
@@ -642,57 +1069,112 @@ class ILI9488Display(DisplayDevice):
     ) -> None:
         if not self._draw:
             return
-        import textwrap
-        from brailce.i18n.strings import get_string
-
         lang = language or getattr(self, "_language", "en")
         title = get_string("MATH_CARD_TITLE", lang)
-        lbl_eq = get_string("MATH_LABEL_EQUATION", lang)
         lbl_st = get_string("MATH_LABEL_STEPS", lang)
         lbl_ex = get_string("MATH_LABEL_EXPLANATION", lang)
+        accent = self._accent(AppMode.MATH)
 
-        self._draw.rectangle([(0, 47), (self._width, self._height - 35)], fill=(11, 15, 25))
+        self._layout = "math_result"
+        self._clear_content()
+        box = (MARGIN, CONTENT_TOP, self._width - MARGIN, self._content_bottom)
+        x0, y0, x1, y1 = box
+        top = self._card(box, title, accent)
 
-        # Solution card (fits 480x320 cleanly with multi-line wrapping)
-        self._draw.rectangle([(15, 56), (465, 276)], fill=(15, 23, 42), outline=(245, 158, 11), width=2)
-        self._draw.text((25, 62), f"{title}:", fill=(251, 191, 36))
-        eq_display = equation.lower() if equation else equation
-        self._draw.text((25, 84), f"{lbl_eq}: {eq_display} = {result}", fill=(255, 255, 255))
+        # Braille panel for the answer (top right), filled by show_braille()
+        pbox = (x1 - 150, y0 + 10, x1 - 10, y0 + 84)
+        self._math_braille_box = tuple(int(v) for v in pbox)  # type: ignore[assignment]
+        self._draw_math_braille([])
 
-        y_next = 106
+        # Big equation: "11 + 3 =" in white, the answer in the accent colour
+        eq_display = equation.lower() if equation else (equation or "")
+        left = f"{eq_display} ="
+        res = str(result)
+        max_w = pbox[0] - (x0 + 16) - 12
+        size = 32
+        while size > 16 and self._tw(left + " " + res, self._f(size, True)) > max_w:
+            size -= 2
+        ey = top + 2
+        self._text((x0 + 16, ey), left, size=size, bold=True, fill=Palette.TEXT)
+        self._text((x0 + 16 + self._tw(left + " ", self._f(size, True)), ey), res, size=size, bold=True, fill=accent)
+
+        # Steps line
+        sy = y0 + 92
         if short_step:
-            self._draw.text((25, y_next), f"{lbl_st}: {short_step[:44]}", fill=(52, 211, 153))
-            y_next += 22
+            self._text((x0 + 16, sy + 3), lbl_st.upper(), size=11, bold=True, fill=Palette.TEXT_3)
+            lx = x0 + 16 + self._tw(lbl_st.upper(), self._f(11, True)) + 10
+            self._text((lx, sy), self._fit(short_step, self._f(15, True), x1 - 16 - lx),
+                       size=15, bold=True, fill=Palette.STEP)
+        dy = sy + 28
+        self._draw.line([(x0 + 16, dy), (x1 - 16, dy)], fill=Palette.BORDER, width=1)
 
-        self._draw.text((25, y_next), f"{lbl_ex}:", fill=(251, 191, 36))
-        y = y_next + 20
-        exp_lines = textwrap.wrap(explanation, width=48)
-        for line in exp_lines:
-            if y + 16 > 272:
-                break
-            self._draw.text((25, y), line, fill=(226, 232, 240))
-            y += 17
+        # Explanation
+        self._text((x0 + 16, dy + 10), lbl_ex.upper(), size=11, bold=True, fill=Palette.TEXT_3)
+        font = self._f(15)
+        lh = 19
+        ty = dy + 28
+        max_lines = max(1, int((y1 - 8 - ty) // lh))
+        for line in self._wrap(explanation or "", font, (x1 - x0) - 32, max_lines=max_lines):
+            self._text((x0 + 16, ty), line, size=15, fill=Palette.TEXT)
+            ty += lh
 
         self.show_status(f"{eq_display} = {result}")
         self._flush_to_hardware()
+
+    def _draw_math_braille(self, cells: List[Set[int]]) -> None:
+        if not self._math_braille_box:
+            return
+        x0, y0, x1, y1 = self._math_braille_box
+        self._rrect((x0, y0, x1, y1), 8, fill=Palette.SURFACE_HI)
+        self._text((x0 + 10, y0 + 6), self._L("BRAILLE"), size=10, bold=True, fill=Palette.TEXT_3)
+        if cells:
+            self._braille_row(cells[:6], (x0 + 8, y0 + 20, x1 - 8, y1 - 6), self._accent(AppMode.MATH))
 
     # -------------------------------------------------------------------------
     # Scanner Mode (Camera Viewfinder)
     # -------------------------------------------------------------------------
 
     def show_scanner_viewfinder(self, status: Optional[str] = None) -> None:
-        """Render initial scanner instructions card."""
+        """Scanner start screen: illustration, instructions, key hints."""
         if not self._draw:
             return
-        self._draw.rectangle([(0, 47), (self._width, self._height - 35)], fill=(11, 15, 25))
+        self._layout = "scanner"
+        accent = self._accent(AppMode.SCANNER)
+        self._clear_content()
+        box = (MARGIN, CONTENT_TOP, self._width - MARGIN, self._content_bottom)
+        x0, y0, x1, y1 = box
+        self._rrect(box, CARD_RADIUS, fill=Palette.SURFACE)
 
-        # Viewfinder box (Neon Emerald)
-        mx, my = 35, 68
-        self._draw.rectangle([(mx, my), (self._width - mx, 260)], outline=(16, 185, 129), width=2)
-        self._draw.text((mx + 15, my + 15), "OPTICAL BRAILLE SCANNER (OBR)", fill=(52, 211, 153))
-        self._draw.text((mx + 15, my + 45), get_string("SCANNER_INSTRUCTION_BOX", self._language), fill=(255, 255, 255))
-        self._draw.text((mx + 15, my + 78), get_string("SCANNER_PRESS_ENTER_TO_CAPTURE", self._language), fill=(251, 191, 36))
-        self._draw.text((mx + 15, my + 108), "• Press TAB to cycle through modes", fill=(148, 163, 184))
+        # Illustration: camera framing brackets around a line of Braille cells
+        ix0, iy0, ix1, iy1 = x0 + 16, y0 + 16, x0 + 164, y0 + 136
+        self._rrect((ix0, iy0, ix1, iy1), 8, fill=Palette.BG)
+        arm = 16
+        for (cx, cy, dx, dy) in ((ix0 + 10, iy0 + 10, 1, 1), (ix1 - 10, iy0 + 10, -1, 1),
+                                 (ix0 + 10, iy1 - 10, 1, -1), (ix1 - 10, iy1 - 10, -1, -1)):
+            self._draw.line([(cx, cy), (cx + dx * arm, cy)], fill=accent, width=3)
+            self._draw.line([(cx, cy), (cx, cy + dy * arm)], fill=accent, width=3)
+        self._braille_row([{1, 2, 5}, {1, 5}, {1, 2, 3}, {1, 3, 5}],
+                          (ix0 + 22, iy0 + 36, ix1 - 22, iy1 - 36), accent)
+        mid = (iy0 + iy1) / 2
+        self._draw.line([(ix0 + 18, mid + 30), (ix1 - 18, mid + 30)], fill=Palette.DOT_OFF, width=1)
+
+        # Text column
+        tx = ix1 + 18
+        self._text((tx, y0 + 18), self._L("SCANNER_TITLE"), size=20, bold=True, fill=Palette.TEXT)
+        ty = y0 + 50
+        for line in self._wrap(get_string("SCANNER_INSTRUCTION_BOX", self._language), self._f(14),
+                               x1 - 16 - tx, max_lines=3):
+            self._text((tx, ty), line, size=14, fill=Palette.TEXT_2)
+            ty += 19
+        ty += 6
+        for line in self._wrap(self._L("SCANNER_TIP"), self._f(13), x1 - 16 - tx, max_lines=3):
+            self._text((tx, ty), line, size=13, fill=Palette.TEXT_3)
+            ty += 17
+
+        self._key_chips(x0 + 16, y1 - 34, x1 - 12, [
+            ("ENTER", self._L("KEY_SCAN")),
+            ("TAB", self._L("KEY_MODE")),
+        ])
 
         st = status or get_string("SCANNER_STATUS_POSITION", self._language)
         self.show_status(st)
@@ -705,14 +1187,14 @@ class ILI9488Display(DisplayDevice):
         overlays: Optional[List[Dict[str, Any]]] = None,
         distance_state: Optional[str] = None,
     ) -> None:
-        """Render camera preview with clean letterboxed framing, decoded cell overlays, and non-blocking frame-skipping."""
+        """Render camera preview with letterboxed framing, decoded cell overlays, and non-blocking frame-skipping."""
         if frame is None:
             return
 
         # Initialize canvas if not yet created
         if self._image is None:
             from PIL import Image, ImageDraw
-            self._image = Image.new("RGB", (self._width, self._height), color=(11, 15, 25))
+            self._image = Image.new("RGB", (self._width, self._height), color=Palette.BG)
             self._draw = ImageDraw.Draw(self._image)
 
         # Frame-skip if hardware SPI or display is currently busy to never starve audio/input threads
@@ -744,36 +1226,27 @@ class ILI9488Display(DisplayDevice):
                         arr = np.clip(arr, 0, 255).astype(np.uint8)
 
                 if arr.ndim == 2:
-                    # 2D Grayscale -> RGB
                     arr_rgb = np.stack([arr, arr, arr], axis=-1)
                 elif arr.ndim == 3:
                     channels = arr.shape[2]
                     if channels == 1:
                         arr_rgb = np.repeat(arr, 3, axis=-1)
-                    elif channels == 4:
-                        # 4-channel to RGB
+                    elif channels in (3, 4):
                         from brailce.vision.camera import SWAP_RED_BLUE
                         arr_rgb = arr[:, :, :3]
                         if SWAP_RED_BLUE:
                             arr_rgb = arr_rgb[:, :, ::-1]
-                    elif channels == 3:
-                        # 3-channel frame to display RGB
-                        from brailce.vision.camera import SWAP_RED_BLUE
-                        if SWAP_RED_BLUE:
-                            arr_rgb = arr[:, :, ::-1]
-                        else:
-                            arr_rgb = arr
                     else:
                         arr_rgb = arr[:, :, :3]
                 else:
                     return
 
-                frame_pil = Image.fromarray(arr_rgb)
+                frame_pil = Image.fromarray(np.ascontiguousarray(arr_rgb))
                 fw, fh = frame_pil.size
 
             # 2. Letterboxed scaling: keep aspect ratio without stretching
             usable_w = int(self._width)
-            usable_h = max(10, int(self._height - 47 - 35))  # beneath header, above status bar
+            usable_h = max(10, int(self._footer_y - HEADER_H - 1))
             scale = min(float(usable_w) / max(1.0, float(fw)), float(usable_h) / max(1.0, float(fh)))
             nw = max(1, int(round(fw * scale)))
             nh = max(1, int(round(fh * scale)))
@@ -783,17 +1256,19 @@ class ILI9488Display(DisplayDevice):
                 Image.Resampling.BILINEAR if hasattr(Image, "Resampling") else Image.BILINEAR,
             )
 
-            preview_img = Image.new("RGB", (self._width, self._height), color=(11, 15, 25))
+            preview_img = Image.new("RGB", (self._width, self._height), color=Palette.BG)
             ox = int((self._width - nw) // 2)
-            oy = int(47 + (usable_h - nh) // 2)
+            oy = int(HEADER_H + 1 + (usable_h - nh) // 2)
             preview_img.paste(resized_pil, (ox, oy))
 
             draw = ImageDraw.Draw(preview_img)
+            self._image = preview_img
+            self._draw = draw
+            self._layout = "camera"
 
-            # Center Braille Scanning Reticle & Framing Border (Embossed HUD style)
+            # Centre reading window (HUD corner brackets + baseline)
             from brailce.vision.obr_engine import SHOW_ROI, ROI_W_FRAC, ROI_H_FRAC
             if SHOW_ROI:
-                # Centered slim single-line framing window for embossed Braille (78% width, 22% height)
                 roi_w_disp = int(nw * ROI_W_FRAC)
                 roi_h_disp = int(nh * ROI_H_FRAC)
                 rx0 = ox + int((nw - roi_w_disp) // 2)
@@ -801,50 +1276,25 @@ class ILI9488Display(DisplayDevice):
                 rx1 = rx0 + roi_w_disp
                 ry1 = ry0 + roi_h_disp
 
-                # Dynamic color feedback based on distance state
                 if distance_state == "ok":
-                    corner_color = (74, 222, 128)     # Bright Vibrant Green
-                    reticle_color = (34, 197, 94)
-                    dim_border = (20, 83, 45)         # Dark Green border
+                    corner_color = Palette.OK
                 elif distance_state in ("too_close", "too_far"):
-                    corner_color = (251, 191, 36)     # Bright Warning Yellow
-                    reticle_color = (245, 158, 11)
-                    dim_border = (120, 53, 15)        # Dark Amber border
+                    corner_color = Palette.WARN
                 else:
-                    corner_color = (56, 189, 248)     # Light Cyan
-                    reticle_color = (14, 165, 233)
-                    dim_border = (12, 74, 110)        # Dark Cyan border
+                    corner_color = self._accent(AppMode.SCANNER)
 
-                # 1. Subtle outline frame
-                draw.rectangle([(rx0, ry0), (rx1, ry1)], outline=dim_border, width=1)
-
-                # 2. Prominent High-Contrast Corner Brackets (HUD style)
-                cl = 22  # corner bracket arm length
-                # Top-Left
-                draw.line([(rx0, ry0), (rx0 + cl, ry0)], fill=corner_color, width=3)
-                draw.line([(rx0, ry0), (rx0, ry0 + cl)], fill=corner_color, width=3)
-                # Top-Right
-                draw.line([(rx1 - cl, ry0), (rx1, ry0)], fill=corner_color, width=3)
-                draw.line([(rx1, ry0), (rx1, ry0 + cl)], fill=corner_color, width=3)
-                # Bottom-Left
-                draw.line([(rx0, ry1), (rx0 + cl, ry1)], fill=corner_color, width=3)
-                draw.line([(rx0, ry1 - cl), (rx0, ry1)], fill=corner_color, width=3)
-                # Bottom-Right
-                draw.line([(rx1 - cl, ry1), (rx1, ry1)], fill=corner_color, width=3)
-                draw.line([(rx1, ry1 - cl), (rx1, ry1)], fill=corner_color, width=3)
-
-                # 3. Horizontal Reading Baseline / Alignment Guide
-                cx, cy = int((rx0 + rx1) // 2), int((ry0 + ry1) // 2)
-                # Margin alignment ticks
-                draw.line([(rx0 + 2, cy), (rx0 + 16, cy)], fill=reticle_color, width=2)
-                draw.line([(rx1 - 16, cy), (rx1 - 2, cy)], fill=reticle_color, width=2)
-                # Center crosshair notch
-                draw.line([(cx - 10, cy), (cx + 10, cy)], fill=reticle_color, width=1)
-                draw.line([(cx, cy - 8), (cx, cy + 8)], fill=reticle_color, width=1)
+                draw.rectangle([(rx0, ry0), (rx1, ry1)], outline=(0, 0, 0), width=1)
+                cl = 22
+                for (cx, cy, dx, dy) in ((rx0, ry0, 1, 1), (rx1, ry0, -1, 1), (rx0, ry1, 1, -1), (rx1, ry1, -1, -1)):
+                    draw.line([(cx, cy), (cx + dx * cl, cy)], fill=corner_color, width=4)
+                    draw.line([(cx, cy), (cx, cy + dy * cl)], fill=corner_color, width=4)
+                cy = int((ry0 + ry1) // 2)
+                draw.line([(rx0 + 4, cy), (rx0 + 16, cy)], fill=corner_color, width=2)
+                draw.line([(rx1 - 16, cy), (rx1 - 4, cy)], fill=corner_color, width=2)
 
             # Decoded Braille cell letter overlays
             if overlays:
-                font_ov = self._font_medium or self._font_small
+                ov_font = self._f(14, True)
                 for ov in overlays:
                     ch = str(ov.get("char", "")).strip()
                     if not ch:
@@ -857,70 +1307,54 @@ class ILI9488Display(DisplayDevice):
                         else:
                             bx1, by1 = raw_bbox[0], raw_bbox[1]
                             bx2, by2 = bx1 + raw_bbox[2], by1 + raw_bbox[3]
-                        # Scale to letterboxed preview coordinates
                         sx1 = int(ox + bx1 * scale)
                         sy1 = int(oy + by1 * scale)
                         sx2 = int(ox + bx2 * scale)
                         sy2 = int(oy + by2 * scale)
 
-                        box_color = (250, 204, 21) if active else (16, 185, 129)
+                        box_color = Palette.WARN if active else Palette.STEP
                         draw.rectangle([(sx1, sy1), (sx2, sy2)], outline=box_color, width=2 if active else 1)
 
-                        # Letter badge placed directly above the Braille cell
-                        tw, th = 18, 18
-                        badge_x = int((sx1 + sx2 - tw) // 2)
-                        badge_y = max(48, sy1 - th - 3)
-                        badge_bg = (250, 204, 21) if active else (6, 78, 59)
-                        text_fg = (0, 0, 0) if active else (255, 255, 255)
-                        draw.rectangle([(badge_x - 2, badge_y - 2), (badge_x + tw + 2, badge_y + th + 2)], fill=badge_bg, outline=box_color, width=1)
-                        draw.text((badge_x + 3, badge_y), ch, fill=text_fg, font=font_ov)
+                        tw = max(18, int(self._tw(ch, ov_font)) + 10)
+                        th = 20
+                        bx = int((sx1 + sx2 - tw) // 2)
+                        by = max(HEADER_H + 4, sy1 - th - 4)
+                        self._rrect((bx, by, bx + tw, by + th), 5,
+                                    fill=box_color if active else (6, 78, 59))
+                        self._text_center(bx + tw / 2, by + th / 2, ch, 14, True,
+                                          Palette.BG if active else Palette.TEXT)
 
-            self._image = preview_img
-            self._draw = draw
             # Header with battery widget
             self._draw_header(AppMode.SCANNER)
 
-            # Detection & Distance Pill Badge (centered right under header)
-            badge_text = None
-            badge_bg = (6, 95, 70)
-            badge_border = (52, 211, 153)
-
+            # Distance / detection pill (centred under the header)
+            pill_text = None
+            pill_color = Palette.STEP
             if distance_state == "ok":
-                badge_text = "SAKTO ANG DISTANSYA | READY"
-                badge_bg = (20, 83, 45)
-                badge_border = (34, 197, 94)
+                pill_text, pill_color = "SAKTO ANG DISTANSYA | READY", Palette.OK
             elif distance_state == "too_close":
-                badge_text = "MASYADONG MALAPIT | ILAYO"
-                badge_bg = (120, 53, 15)
-                badge_border = (245, 158, 11)
+                pill_text, pill_color = "MASYADONG MALAPIT | ILAYO", Palette.WARN
             elif distance_state == "too_far":
-                badge_text = "MASYADONG MALAYO | ILAPIT"
-                badge_bg = (120, 53, 15)
-                badge_border = (245, 158, 11)
+                pill_text, pill_color = "MASYADONG MALAYO | ILAPIT", Palette.WARN
             elif status and "detected" in str(status).lower():
-                status_str = str(status)[:46]
-                if "no " in status_str.lower() or "not" in status_str.lower():
-                    badge_text = status_str
-                    badge_bg = (153, 27, 27)
-                    badge_border = (239, 68, 68)
-                else:
-                    badge_text = status_str
-                    badge_bg = (6, 95, 70)
-                    badge_border = (52, 211, 153)
+                pill_text = str(status)[:46]
+                low = pill_text.lower()
+                pill_color = Palette.DANGER if ("no " in low or "not" in low) else Palette.STEP
 
-            if badge_text:
-                badge_w = 340
-                bx0 = int((self._width - badge_w) // 2)
-                f_small = self._font_small or None
-                draw.rectangle([(bx0, 50), (bx0 + badge_w, 74)], fill=badge_bg, outline=badge_border, width=1)
-                draw.text((bx0 + 10, 54), badge_text, fill=(255, 255, 255), font=f_small)
+            if pill_text:
+                pf = self._f(12, True)
+                pill_text = self._fit(pill_text, pf, self._width - 80)
+                pw = self._tw(pill_text, pf) + 40
+                px0 = (self._width - pw) / 2
+                py0 = HEADER_H + 8
+                self._rrect((px0, py0, px0 + pw, py0 + 24), 12, fill=(12, 15, 22), outline=pill_color)
+                self._circle(px0 + 14, py0 + 12, 4, fill=pill_color)
+                self._text_center(px0 + 24 + self._tw(pill_text, pf) / 2, py0 + 12, pill_text, 12, True, Palette.TEXT)
 
-            # Bottom Status Bar (solid fill to prevent text ghosting)
+            # Bottom status bar
             lang = getattr(self, "_language", "en") or "en"
             st = str(status) if status else get_string("SCANNER_STATUS_POSITION", lang)
-            draw.rectangle([(0, self._height - 34), (self._width, self._height)], fill=(3, 7, 18))
-            draw.line([(0, self._height - 34), (self._width, self._height - 34)], fill=(31, 41, 55), width=1)
-            draw.text((15, self._height - 24), f"- {st[:55]}", fill=(56, 189, 248), font=self._font_small or None)
+            self._draw_footer(st, dot=self._accent(AppMode.SCANNER))
 
             # Direct SPI / framebuffer flush (must be done while holding lock)
             if self._device is not None:
@@ -952,27 +1386,30 @@ class ILI9488Display(DisplayDevice):
     # -------------------------------------------------------------------------
 
     def show_status(self, message: str) -> None:
-        """Render unified bottom status bar without ghosting."""
+        """Bottom status bar: accent dot + message."""
         if not self._draw:
             return
         self._last_status_msg = message
-        self._draw.rectangle([(0, self._height - 34), (self._width, self._height)], fill=(3, 7, 18))
-        self._draw.line([(0, self._height - 34), (self._width, self._height - 34)], fill=(31, 41, 55), width=1)
-        self._draw.text((15, self._height - 24), f"● {message[:55]}", fill=(251, 191, 36))
+        self._draw_footer(message)
         self._flush_to_hardware()
 
     def show_error(self, message: str) -> None:
-        """Render prominent red error bar at bottom."""
+        """Red error bar at the bottom."""
         if not self._draw:
             return
-        self._draw.rectangle([(0, self._height - 34), (self._width, self._height)], fill=(127, 29, 29))
-        self._draw.line([(0, self._height - 34), (self._width, self._height - 34)], fill=(239, 68, 68), width=1)
-        self._draw.text((15, self._height - 24), f"⚠ Error: {message[:50]}", fill=(255, 255, 255))
+        fy = self._footer_y
+        self._draw.rectangle([(0, fy), (self._width, self._height)], fill=Palette.DANGER_BG)
+        self._draw.line([(0, fy), (self._width, fy)], fill=Palette.DANGER, width=1)
+        cy = fy + FOOTER_H / 2
+        self._circle(MARGIN + 8, cy, 8, fill=Palette.DANGER)
+        self._text_center(MARGIN + 8, cy, "!", 12, True, Palette.DANGER_BG)
+        msg = self._fit(f"{self._L('ERROR')}: {message}", self._f(13, True), self._width - MARGIN * 2 - 28)
+        self._text_center(MARGIN + 24 + self._tw(msg, self._f(13, True)) / 2, cy, msg, 13, True, Palette.TEXT)
         self._flush_to_hardware()
 
     def clear(self) -> None:
         if self._draw:
-            self._draw.rectangle([(0, 0), (self._width, self._height)], fill=(11, 15, 25))
+            self._draw.rectangle([(0, 0), (self._width, self._height)], fill=Palette.BG)
             if self._current_mode:
                 self.show_mode(self._current_mode)
             self._flush_to_hardware()

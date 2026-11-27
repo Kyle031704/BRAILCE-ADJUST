@@ -427,3 +427,24 @@ The physical Brailce device uses a dedicated custom keypad with only 40 keys: A-
 - `brailce/input/keyboard_input.py`: Added `"power"` handling in `_dispatch_key_name` emitting `POWER_BUTTON_PRESSED`.
 - `brailce/core/app.py`: Tracks `_last_backspace_time` and `_last_power_button_time`. When `BACKSPACE_PRESSED` occurs while the power button is held (or pressed within 1.5s), or when `POWER_BUTTON_PRESSED` occurs within 1.5s of Backspace, `_handle_shutdown_pressed()` fires safe shutdown (voice announcement -> display status -> audio drain -> `systemctl poweroff`).
 - `brailce/tests/test_shutdown.py`: Added `TestBackspacePowerCombo` (5 new tests verifying Backspace+Power combo, Power+Backspace combo, held GPIO button, and that Backspace or Power alone never triggers shutdown). All 41 tests pass.
+
+---
+
+### Section O — LCD Redesign + Coloured Braille Scanning (2026-11-27)
+
+**LCD (`brailce/display/ili9488_display.py`)**
+- **Root cause of the dated look:** the module never imported `os`, so `_load_font()` raised `NameError` on every call, swallowed it, and fell back to Pillow's 10 px default font (Aileron). Every LCD string was rendered in that tiny font, and `•`, `⚡`, `●`, `⚠` and Braille glyphs rendered as tofu boxes. `self._font_medium` was also never defined, so camera-preview overlays raised and were silently skipped.
+- Bundled DejaVu Sans regular + bold (`brailce/display/fonts/`, licence in `LICENSE_DEJAVU.txt`). Removed `BrailceDefault.ttf`: it was a copy of Microsoft Arial, which may not be redistributed.
+- New design system: near-neutral dark background with clearly brighter rounded cards (survives the TN panel's viewing angle), one accent colour per mode, small caption titles, key-cap hints (`ENTER` / `BKSP` / `TAB`), shape-drawn icons, pixel-width text wrapping with ellipsis.
+- Braille cells are drawn from the Unicode pattern bits, so multi-cell output (e.g. the math answer `14` = `⠂⠲`) shows every cell instead of merging all dots into one cell ("Dot 2 Dots 2-5-6").
+- Math result card reserves its own Braille panel; `show_braille()` after `show_math_result()` fills that panel instead of drawing a card over the explanation text.
+- Math typing shows the math status hint instead of the Free Input "Press Space for word" hint.
+- Short LCD labels have EN/FIL variants (`LCD_LABELS`); frozen English speech/status strings are untouched.
+- `tools/render_screens.py --all OUT [fil]` renders every screen variant for review.
+
+**Scanner (`brailce/vision/obr_engine.py`)**
+- **Root cause:** every detector works on `COLOR_BGR2GRAY`. Red dots on a green board map to ~91 vs ~103 gray, so the dots vanish and reads were noise.
+- `OBREngine.color_contrast_image()`: principal a*b* colour axis of the center box (whole frame if the box is uniform), dot colour mapped dark and board colour light, returned as BGR so all existing detectors run unchanged.
+- `scan_frame()`: achromatic pages (white paper, embossed or printed) take the unchanged grayscale path. When the dot/board classes differ in colour but not in gray brightness, only the colour image is decoded. Other colourful frames decode both and keep the higher score. `braille_presence_confidence()` (live "Braille detected" badge) uses the colour image in the same case. `BRAILCE_COLOR_SCAN=0` disables the colour path.
+- Tests: `brailce/tests/test_obr_color.py` (synthetic red-on-green page, white-paper samples stay grayscale), new LCD regression tests in `test_display_lowercase.py`.
+- `tools/make_color_test_sheet.py` writes printable A4 test sheets (`tools/test_sheets/`): red-on-green and black-on-white, large and standard Braille, one sentence per line with wide line spacing, answer key in the bottom margin. Simulated camera scans (blur + noise) read 22/22 lines; with `BRAILCE_COLOR_SCAN=0` the colour pages read nothing.
