@@ -408,3 +408,35 @@ def test_lcd_space_only_buffer_does_not_crash(lcd: ILI9488Display) -> None:
     """Space as the first key gives an all-space buffer; textwrap returns [] (was IndexError)."""
     lcd.show_text_buffer(" ")
     lcd.show_ai_query_input("  ")
+
+
+class TestILI9488BatchAndLock:
+    def test_batch_sends_one_lcd_update(self, lcd: ILI9488Display, monkeypatch) -> None:
+        flushes = []
+        monkeypatch.setattr(lcd, "_device", type("Dev", (), {"display": lambda self, img: flushes.append(1)})())
+        lcd._current_mode = AppMode.SCANNER
+        with lcd.batch():
+            lcd.show_character("b")
+            lcd.show_braille("\u2803", "Dots 1-2", "")
+            lcd.show_text_buffer("BAHAY")
+        assert len(flushes) == 1
+
+    def test_preview_skips_frame_while_another_thread_draws(self, lcd: ILI9488Display) -> None:
+        import threading
+        import numpy as np
+        drawn = threading.Event()
+        release = threading.Event()
+
+        def hold_canvas():
+            with lcd._canvas_lock:
+                drawn.set()
+                release.wait(2)
+
+        t = threading.Thread(target=hold_canvas)
+        t.start()
+        drawn.wait(2)
+        before = lcd._image
+        lcd.show_camera_preview(np.zeros((48, 64, 3), np.uint8), status="x")
+        assert lcd._image is before          # frame skipped, canvas untouched
+        release.set()
+        t.join()

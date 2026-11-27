@@ -675,6 +675,18 @@ class ScannerMode(BaseMode):
         else:
             speech.speak_text(word, interrupt=False)
 
+    @staticmethod
+    def _display_batch(display: Any) -> Any:
+        """Group several display calls into one LCD flush when the driver supports it."""
+        batch = getattr(display, "batch", None)
+        if callable(batch):
+            try:
+                return batch()
+            except Exception:
+                pass
+        import contextlib
+        return contextlib.nullcontext()
+
     def _readout_worker(self, result: Dict[str, Any]) -> None:
         """
         Systematically read decoded cells:
@@ -687,18 +699,6 @@ class ScannerMode(BaseMode):
         speech = getattr(self.app, "speech", None)
         display = getattr(self.app, "display", None)
         cells: List[Dict[str, Any]] = list(result.get("cells") or [])
-
-        # Build overlay entries for all cells
-        overlays: List[Dict[str, Any]] = []
-        for c in cells:
-            ch_c = str(c.get("char", "")).strip()
-            box_c = c.get("bbox") or c.get("box")
-            if box_c is None and "center" in c and "pitch" in c:
-                cx, cy = c["center"]
-                p = c["pitch"]
-                box_c = (cx - p * 0.7, cy - p * 1.1, p * 1.4, p * 2.2)
-            if box_c and ch_c:
-                overlays.append({"char": ch_c, "bbox": box_c, "active": False, "cell": c})
 
         try:
             if not cells:
@@ -743,17 +743,16 @@ class ScannerMode(BaseMode):
                 ch = str(cell.get("char", "")).upper()
 
                 if display:
-                    if hasattr(display, "show_character"):
-                        display.show_character(ch)
-                    if dots_str and hasattr(display, "show_braille"):
-                        display.show_braille(ch, dots_str, "")
-                    if self._scanned_frame is not None and hasattr(display, "show_camera_preview") and overlays:
-                        for ov in overlays:
-                            ov["active"] = (ov.get("cell") is cell)
-                        try:
-                            display.show_camera_preview(self._scanned_frame, status=self.scanned_text or ch, overlays=overlays)
-                        except Exception:
-                            pass
+                    # One steady result screen (character + Braille cell + scanned text),
+                    # sent to the LCD in a single flush. Alternating it with the camera
+                    # frame every letter made the slow SPI panel tear and flicker.
+                    with self._display_batch(display):
+                        if hasattr(display, "show_character"):
+                            display.show_character(ch)
+                        if dots_str and hasattr(display, "show_braille"):
+                            display.show_braille(ch, dots_str, "")
+                        if self.scanned_text and hasattr(display, "show_text_buffer"):
+                            display.show_text_buffer(self.scanned_text)
 
                 if kind == "unknown" or not ch.strip():
                     cur_has_unknown = True
@@ -775,23 +774,21 @@ class ScannerMode(BaseMode):
                 self._speak_completed_word(cur_word, cur_has_unknown)
                 if not self._stop_readout_event.is_set():
                     self._stop_readout_event.wait(1.5)
-                if self._scanned_frame is not None and hasattr(display, "show_camera_preview") and overlays:
-                    for ov in overlays:
-                        ov["active"] = False
-                    try:
-                        display.show_camera_preview(self._scanned_frame, status=self.scanned_text, overlays=overlays)
-                    except Exception:
-                        pass
         finally:
-            self._is_reading = False
-            self._is_scanning = False
             if not self._stop_readout_event.is_set():
+                # Show the final text while the live preview is still paused, so the
+                # preview thread never draws over the result screen mid-update.
                 if display and self.scanned_text:
                     display.show_text_buffer(self.scanned_text)
                 self._stop_readout_event.wait(0.6)
+                self._is_reading = False
+                self._is_scanning = False
                 # Auto-return to live preview and distance guidance
                 self._reset_scan_state()
             else:
+                self._is_reading = False
+                self._is_scanning = False
+            if self._stop_readout_event.is_set():
                 # Cancelled by Esc or keypress: clear locks so preview resumes
                 self.scanned_text = None
                 self._last_result = None

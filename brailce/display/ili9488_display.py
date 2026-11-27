@@ -17,6 +17,8 @@ Design notes (why it looks the way it does):
 
 from __future__ import annotations
 
+import contextlib
+import functools
 import logging
 import os
 import re
@@ -123,6 +125,16 @@ LCD_LABELS: Dict[str, Dict[str, str]] = {
 }
 
 
+def _canvas_locked(fn):
+    """Serialise canvas drawing: the scanner's preview thread and the mode/readout
+    threads must never draw into the same PIL image at the same time."""
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        with self._canvas_lock:
+            return fn(self, *args, **kwargs)
+    return wrapper
+
+
 def _dots_from_unicode(ch: str) -> Optional[Set[int]]:
     """Return the raised dots (1-6) for a Unicode Braille pattern character."""
     if len(ch) != 1:
@@ -212,6 +224,8 @@ class ILI9488Display(DisplayDevice):
         self._hardware_type = "canvas"
         self._init_error = None
         self._display_lock = threading.Lock()
+        self._canvas_lock = threading.RLock()
+        self._batch_depth = 0
         self._power_monitor: Optional[Any] = None
         self._battery_override: Optional[tuple[int, bool]] = None
         self._current_query: str = ""
@@ -322,18 +336,26 @@ class ILI9488Display(DisplayDevice):
                             device=self._spi_device,
                             gpio_DC=self._gpio_dc,
                             gpio_RST=self._gpio_rst,
-                            bus_speed_hz=4000000,
+                            bus_speed_hz=int(os.environ.get("BRAILCE_SPI_HZ", "4000000")),
                             gpio=gpio_backend,
                         )
                         # ILI9488 natively requires landscape (480, 320) with rotate=0
-                        self._device = driver_cls(
-                            serial,
-                            width=480,
-                            height=320,
-                            rotate=0,
-                            gpio=gpio_backend,
-                            backlight=NoopBacklight(),
-                        )
+                        dev_kwargs = dict(width=480, height=320, rotate=0,
+                                          gpio=gpio_backend, backlight=NoopBacklight())
+                        # Partial refresh: only the changed region is sent over SPI, which
+                        # removes most of the visible tearing on this slow panel.
+                        # BRAILCE_LCD_FULL_REFRESH=1 restores full-frame updates.
+                        if os.environ.get("BRAILCE_LCD_FULL_REFRESH", "0") != "1":
+                            try:
+                                from luma.core.framebuffer import diff_to_previous
+                                dev_kwargs["framebuffer"] = diff_to_previous(num_segments=8)
+                            except Exception:
+                                pass
+                        try:
+                            self._device = driver_cls(serial, **dev_kwargs)
+                        except TypeError:
+                            dev_kwargs.pop("framebuffer", None)
+                            self._device = driver_cls(serial, **dev_kwargs)
                         self._hardware_type = f"spi-{driver_mod}"
                         logger.info(
                             "%s connected via direct SPI (DC=GPIO%d, RST=GPIO%d).",
@@ -383,9 +405,21 @@ class ILI9488Display(DisplayDevice):
                 logger.warning("Could not save screenshot: %s", exc)
         return False
 
+    @contextlib.contextmanager
+    def batch(self):
+        """Group several show_* calls into ONE LCD update (no half-drawn screens)."""
+        with self._canvas_lock:
+            self._batch_depth += 1
+            try:
+                yield self
+            finally:
+                self._batch_depth -= 1
+                if self._batch_depth == 0:
+                    self._flush_to_hardware()
+
     def _flush_to_hardware(self) -> None:
         """Thread-safe blit of the current image buffer to the TFT via direct SPI."""
-        if not self._image:
+        if not self._image or self._batch_depth > 0:
             return
 
         with self._display_lock:
@@ -452,6 +486,7 @@ class ILI9488Display(DisplayDevice):
                 return False
         return False
 
+    @_canvas_locked
     def show_battery(self, percentage, charging: bool = False) -> None:
         """
         Refresh the header battery widget ("75%" / "75%+") with the value
@@ -728,6 +763,7 @@ class ILI9488Display(DisplayDevice):
     # Operating Modes Rendering
     # =========================================================================
 
+    @_canvas_locked
     def show_mode(self, mode: AppMode) -> None:
         """Switch mode and draw its start screen."""
         self._current_mode = mode
@@ -877,6 +913,7 @@ class ILI9488Display(DisplayDevice):
         cy0 = y - 24 + 2
         self._draw.rectangle([(cx, cy0), (cx + 2, cy0 + 20)], fill=self._accent())
 
+    @_canvas_locked
     def show_character(self, character: str) -> None:
         if not self._draw or self._current_mode == AppMode.AI_ASSISTANT:
             return
@@ -884,6 +921,7 @@ class ILI9488Display(DisplayDevice):
         self._draw_char_card(character)
         self._flush_to_hardware()
 
+    @_canvas_locked
     def show_braille(self, unicode_char: str, dots_string: str, dots_visual: str) -> None:
         if not self._draw or self._current_mode == AppMode.AI_ASSISTANT:
             return
@@ -904,6 +942,7 @@ class ILI9488Display(DisplayDevice):
         self._draw_braille_card(cells, label)
         self._flush_to_hardware()
 
+    @_canvas_locked
     def show_text_buffer(self, text: str) -> None:
         if not self._draw:
             return
@@ -923,6 +962,7 @@ class ILI9488Display(DisplayDevice):
     # AI Assistant Mode
     # -------------------------------------------------------------------------
 
+    @_canvas_locked
     def show_ai_query_input(self, query: str) -> None:
         """Question card with live text + cursor, and a controls card."""
         if not self._draw:
@@ -960,6 +1000,7 @@ class ILI9488Display(DisplayDevice):
         self.show_status(get_string("AI_STATUS_PROMPT", self._language, count=len(query)))
         self._flush_to_hardware()
 
+    @_canvas_locked
     def show_ai_processing(self, query: Optional[str] = None) -> None:
         """Question recap and a 'thinking' card."""
         if not self._draw:
@@ -997,6 +1038,7 @@ class ILI9488Display(DisplayDevice):
 
         self._flush_to_hardware()
 
+    @_canvas_locked
     def show_ai_response(self, response: str, query: Optional[str] = None) -> None:
         """Compact question line and a large answer card."""
         if not self._draw:
@@ -1059,6 +1101,7 @@ class ILI9488Display(DisplayDevice):
         ])
         self.show_status(get_string("MATH_STATUS_READY", self._language))
 
+    @_canvas_locked
     def show_math_result(
         self,
         equation: str,
@@ -1134,6 +1177,7 @@ class ILI9488Display(DisplayDevice):
     # Scanner Mode (Camera Viewfinder)
     # -------------------------------------------------------------------------
 
+    @_canvas_locked
     def show_scanner_viewfinder(self, status: Optional[str] = None) -> None:
         """Scanner start screen: illustration, instructions, key hints."""
         if not self._draw:
@@ -1198,7 +1242,10 @@ class ILI9488Display(DisplayDevice):
             self._draw = ImageDraw.Draw(self._image)
 
         # Frame-skip if hardware SPI or display is currently busy to never starve audio/input threads
+        if not self._canvas_lock.acquire(blocking=False):
+            return  # another thread is drawing a screen: skip this preview frame
         if not self._display_lock.acquire(blocking=False):
+            self._canvas_lock.release()
             return
 
         try:
@@ -1377,6 +1424,7 @@ class ILI9488Display(DisplayDevice):
             logger.debug("Error updating ILI9488 camera preview: %s", exc)
         finally:
             self._display_lock.release()
+            self._canvas_lock.release()
 
     def close_camera_preview(self) -> None:
         self.clear()
@@ -1385,6 +1433,7 @@ class ILI9488Display(DisplayDevice):
     # Status & Alerts (Unified Bottom Bar Geometry)
     # -------------------------------------------------------------------------
 
+    @_canvas_locked
     def show_status(self, message: str) -> None:
         """Bottom status bar: accent dot + message."""
         if not self._draw:
@@ -1393,6 +1442,7 @@ class ILI9488Display(DisplayDevice):
         self._draw_footer(message)
         self._flush_to_hardware()
 
+    @_canvas_locked
     def show_error(self, message: str) -> None:
         """Red error bar at the bottom."""
         if not self._draw:
@@ -1407,6 +1457,7 @@ class ILI9488Display(DisplayDevice):
         self._text_center(MARGIN + 24 + self._tw(msg, self._f(13, True)) / 2, cy, msg, 13, True, Palette.TEXT)
         self._flush_to_hardware()
 
+    @_canvas_locked
     def clear(self) -> None:
         if self._draw:
             self._draw.rectangle([(0, 0), (self._width, self._height)], fill=Palette.BG)
