@@ -71,6 +71,9 @@ class DisplayDevice(abc.ABC):
     def clear(self) -> None:
         """Clear all display content."""
 
+    def show_splash(self, message: str = "") -> None:
+        """Optional boot screen shown right after initialize() (default: nothing)."""
+
     def show_camera_preview(
         self,
         frame: Any,

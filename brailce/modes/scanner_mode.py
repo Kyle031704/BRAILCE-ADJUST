@@ -675,6 +675,36 @@ class ScannerMode(BaseMode):
         else:
             speech.speak_text(word, interrupt=False)
 
+    def _prefetch_words(self, cells: List[Dict[str, Any]], speech: Any) -> None:
+        """Start preparing every scanned word's audio now, while the letters are being
+        spelled, so the word is spoken right after its letters (no synthesis wait)."""
+        if not speech or not hasattr(speech, "prefetch_word"):
+            return
+        words: List[str] = []
+        cur: List[str] = []
+        bad = False
+        key = None
+        for c in cells:
+            k = (c.get("line_index", 0), c.get("word_index", 0))
+            if key is not None and k != key:
+                if cur and not bad:
+                    words.append("".join(cur))
+                cur, bad = [], False
+            key = k
+            kind = c.get("kind", "char")
+            if kind == "indicator":
+                continue
+            ch = str(c.get("char", "")).upper()
+            if kind == "unknown" or not ch.strip():
+                bad = True
+                continue
+            cur.append(ch)
+        if cur and not bad:
+            words.append("".join(cur))
+        for w in dict.fromkeys(words):
+            if len(w) > 1:
+                speech.prefetch_word(w)
+
     @staticmethod
     def _display_batch(display: Any) -> Any:
         """Group several display calls into one LCD flush when the driver supports it."""
@@ -699,6 +729,7 @@ class ScannerMode(BaseMode):
         speech = getattr(self.app, "speech", None)
         display = getattr(self.app, "display", None)
         cells: List[Dict[str, Any]] = list(result.get("cells") or [])
+        self._prefetch_words(cells, speech)
 
         try:
             if not cells:
@@ -810,13 +841,11 @@ class ScannerMode(BaseMode):
         self._stop_readout_event.clear()
 
         if getattr(self.app, "display", None):
-            self.app.display.clear()
-            self.app.display.show_mode(self.mode_type)
-            ready = get_string("SCANNER_READY", self._lang())
-            if hasattr(self.app.display, "show_scanner_viewfinder"):
-                self.app.display.show_scanner_viewfinder(status=ready)
-            else:
-                self.app.display.show_status(ready)
+            # show_mode() already draws the scanner screen; clear() would first redraw
+            # the PREVIOUS mode's screen, and a second viewfinder draw is redundant.
+            with self._display_batch(self.app.display):
+                self.app.display.show_mode(self.mode_type)
+                self.app.display.show_status(get_string("SCANNER_READY", self._lang()))
 
         self._preview_running = True
         if self._preview_thread is None or not self._preview_thread.is_alive():

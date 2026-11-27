@@ -90,6 +90,11 @@ STRINGS: Dict[str, Dict[str, str]] = {
     # Filipino uses the banked verb "pinapatay" (same verb as
     # APP_SHUTDOWN); "nagpapatay" has no cached WAV in the frozen
     # brailce/audio/filipino word bank.
+    "BATTERY_CRITICAL_SHUTDOWN": {
+        "en": "Battery is almost empty. Shutting down safely.",
+        # every word has a cached Filipino WAV (test_filipino_math cache-coverage check)
+        "fil": "Kaunti na ang natitirang lakas. Pinapatay na ang Brailce.",
+    },
     "SHUTDOWN_ANNOUNCE": {
         "en": "Shutting down. Goodbye.",
         "fil": "Pinapatay na ang Brailce. Paalam.",

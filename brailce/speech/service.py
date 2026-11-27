@@ -254,6 +254,18 @@ class SpeechService(SpeechEngine):
         with self._lock:
             self._character_engine.speak(normalized, interrupt=False)
 
+    def prefetch_word(self, word: str) -> None:
+        """Prepare a word's audio in the background (Filipino: cache or online/offline
+        synthesis) so a later speak_word_clean(word) starts without waiting."""
+        if not word or self._language != "fil":
+            return
+        prepared = prepare_spoken_word(word, lang=self._language)
+        if prepared and len(prepared.rstrip(".!?,;:")) > 1:
+            try:
+                self.filipino_engine.prefetch(prepared)
+            except Exception as exc:
+                logger.debug("prefetch_word failed for %r: %s", word, exc)
+
     def speak_word_clean(self, word: str, interrupt: bool = False) -> None:
         """
         Single unified word-speaking entry point used by Space, Enter-on-single-word,

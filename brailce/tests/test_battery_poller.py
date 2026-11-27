@@ -330,3 +330,40 @@ class TestDisplayAndStateUpdates:
             poller.stop()
         assert len(display.battery_calls) >= 3
         assert poller._thread.is_alive() is False
+
+
+class TestCriticalBatteryShutdown:
+    def _poller(self, statuses, fired):
+        from unittest.mock import MagicMock
+        from brailce.power.poller import BatteryPoller
+        mon = MagicMock()
+        mon.get_status.side_effect = statuses
+        return BatteryPoller(monitor=mon, poll_seconds=1, critical_percent=5,
+                             on_critical=lambda: fired.append(1), critical_polls=3)
+
+    def _st(self, pct, charging=False):
+        from brailce.power.base import PowerStatus
+        return PowerStatus(percentage=pct, is_charging=charging, is_plugged_in=charging, status_text="")
+
+    def test_fires_once_after_three_low_polls(self):
+        fired = []
+        p = self._poller([self._st(5), self._st(4), self._st(4), self._st(3), self._st(2)], fired)
+        for _ in range(5):
+            p.poll_once()
+        assert fired == [1]
+
+    def test_glitch_or_charging_resets_streak(self):
+        fired = []
+        p = self._poller([self._st(4), self._st(4), self._st(40), self._st(4), self._st(4, True), self._st(4)], fired)
+        for _ in range(6):
+            p.poll_once()
+        assert fired == []
+
+    def test_disabled_by_default(self):
+        from unittest.mock import MagicMock
+        from brailce.power.poller import BatteryPoller
+        mon = MagicMock()
+        mon.get_status.return_value = self._st(1)
+        p = BatteryPoller(monitor=mon, poll_seconds=1)
+        for _ in range(5):
+            p.poll_once()   # no handler, no crash

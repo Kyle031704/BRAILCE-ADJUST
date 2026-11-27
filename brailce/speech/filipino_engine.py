@@ -604,6 +604,8 @@ class FilipinoEngine:
         self._worker: Optional[threading.Thread] = None
         self._running = False
         self._queue_lock = threading.Lock()
+        self._prefetch_lock = threading.Lock()
+        self._prefetch_inflight: dict = {}
 
     def _ensure_worker(self) -> None:
         with self._queue_lock:
@@ -691,23 +693,14 @@ class FilipinoEngine:
             return AudioDeviceCoordinator.play_wav_file(thinking_path, owner="filipino_thinking", timeout=6.0)
         return self.speak_filipino("Nag-iisip, mangyaring maghintay.")
 
-    def speak_filipino(self, text: str, allow_ai_cache: bool = False) -> bool:
-        """
-        Speak Filipino text using ONE consistent offline Filipino voice
-        (sherpa-onnx MMS-TTS tgl VITS + pre-rendered word bank):
-        1. Single cached word -> play brailce/audio/filipino/word_<word>.wav directly.
-        2. Multi-word or unseen text -> check hash cache sentence_<md5>.wav.
-        3. Synthesize offline via sherpa-onnx MMS-TTS tgl VITS, normalize & cache to
-           sentence_<md5>.wav, and play strictly through AudioDeviceCoordinator.
-        4. If sherpa model is unavailable, concatenate cached Filipino word WAVs
-           (never falling back to online edge-tts or English Ryan phonetic respelling).
-        """
+    def _resolve_audio(self, text: str, allow_ai_cache: bool = False, synthesize: bool = True) -> Optional[str]:
+        """Find (or synthesize and cache) the WAV for text without playing it. Steps 1-5 of speak_filipino()."""
         if not text:
-            return False
+            return None
 
         trimmed = text.strip()
         if not trimmed:
-            return False
+            return None
 
         # 1. Single-word cache lookup (preserves hyphens like 'labing-isa')
         words = trimmed.split()
@@ -715,7 +708,7 @@ class FilipinoEngine:
             wav_path = get_filipino_word_path(words[0])
             if wav_path and os.path.isfile(wav_path):
                 logger.info("FilipinoEngine: Playing cached word '%s' (%s)", words[0], wav_path)
-                return AudioDeviceCoordinator.play_wav_file(wav_path, owner="filipino", timeout=10.0)
+                return wav_path
 
         cache_dir = _find_filipino_audio_dir()
         os.makedirs(cache_dir, exist_ok=True)
@@ -748,7 +741,7 @@ class FilipinoEngine:
             named_p = os.path.join(cache_dir, matched_named)
             if os.path.isfile(named_p) and os.path.getsize(named_p) > 1000:
                 logger.info("FilipinoEngine: Playing pre-rendered named phrase (%s)", named_p)
-                return AudioDeviceCoordinator.play_wav_file(named_p, owner="filipino", timeout=30.0)
+                return named_p
 
         # 3. Check if a pre-cached AI offline answer exists (only if explicitly allowed, e.g. from AI assistant)
         if allow_ai_cache:
@@ -756,7 +749,7 @@ class FilipinoEngine:
             ai_path = os.path.join(cache_dir, f"ai_{slug_key}.wav")
             if os.path.isfile(ai_path) and os.path.getsize(ai_path) > 1000:
                 logger.info("FilipinoEngine: Playing pre-cached AI answer (%s)", ai_path)
-                return AudioDeviceCoordinator.play_wav_file(ai_path, owner="filipino", timeout=30.0)
+                return ai_path
 
         # 4. Hash cache for full sentences / math explanations / AI replies
         for candidate_key in (norm_key, trimmed.strip().lower(), trimmed):
@@ -766,14 +759,61 @@ class FilipinoEngine:
                 cached_sentence = os.path.join(cache_dir, h)
                 if os.path.isfile(cached_sentence) and os.path.getsize(cached_sentence) > 1000:
                     logger.info("FilipinoEngine: Playing hash-cached sentence (%s)", cached_sentence)
-                    return AudioDeviceCoordinator.play_wav_file(cached_sentence, owner="filipino", timeout=45.0)
+                    return cached_sentence
 
         # 5. Whole-phrase/sentence synthesis: Edge-TTS fil-PH-BlessicaNeural (rate='-5%') saved to sentence_<sha1>.wav
         h_main = hashlib.sha1(trimmed.encode("utf-8")).hexdigest()
         target_wav = os.path.join(cache_dir, f"sentence_{h_main}.wav")
-        if self.synthesize_to_wav(trimmed, target_wav):
+        if synthesize and self.synthesize_to_wav(trimmed, target_wav):
             if os.path.isfile(target_wav) and os.path.getsize(target_wav) > 1000:
-                return AudioDeviceCoordinator.play_wav_file(target_wav, owner="filipino", timeout=45.0)
+                return target_wav
+        return None
+
+
+    def prefetch(self, text: str) -> None:
+        """Prepare text's audio in the background (cache lookup or synthesis) so a later
+        speak_filipino(text) plays at once. Used by Scanner while it spells the letters."""
+        key = (text or "").strip()
+        if not key:
+            return
+        with self._prefetch_lock:
+            if key in self._prefetch_inflight:
+                return
+            done = threading.Event()
+            self._prefetch_inflight[key] = done
+
+        def _run() -> None:
+            try:
+                self._resolve_audio(key)
+            except Exception as exc:
+                logger.debug("Filipino prefetch failed for %r: %s", key, exc)
+            finally:
+                done.set()
+                with self._prefetch_lock:
+                    self._prefetch_inflight.pop(key, None)
+
+        threading.Thread(target=_run, name="filipino-prefetch", daemon=True).start()
+
+    def speak_filipino(self, text: str, allow_ai_cache: bool = False) -> bool:
+        """
+        Speak Filipino text: cached word -> named phrase -> AI cache -> sentence hash
+        cache -> synthesis (_resolve_audio), then offline fallbacks. If a prefetch of the
+        same text is still running, wait for it instead of synthesizing twice.
+        """
+        if not text or not text.strip():
+            return False
+        key = text.strip()
+        with self._prefetch_lock:
+            pending = self._prefetch_inflight.get(key)
+        if pending is not None:
+            pending.wait(timeout=20.0)
+        path = self._resolve_audio(text, allow_ai_cache=allow_ai_cache)
+        if path:
+            return AudioDeviceCoordinator.play_wav_file(path, owner="filipino", timeout=45.0)
+        trimmed = key
+        cache_dir = _find_filipino_audio_dir()
+        h_main = hashlib.sha1(trimmed.encode("utf-8")).hexdigest()
+        target_wav = os.path.join(cache_dir, f"sentence_{h_main}.wav")
 
         # 6. Fallback (strictly if offline and sentence is not in cache): Seamless concatenated word WAVs
         if self._play_offline_concatenated_sentence(trimmed, target_wav):

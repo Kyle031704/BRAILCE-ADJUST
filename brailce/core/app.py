@@ -118,18 +118,24 @@ class BrailceApp:
                 from brailce.display.ili9488_display import ILI9488Display
                 width = self.config.get("display", "width", default=480)
                 height = self.config.get("display", "height", default=320)
-                self.display = ILI9488Display(width=width, height=height)
+                self.display = ILI9488Display(width=width, height=height,
+                                              spi_speed_hz=self.config.get("display", "spi_speed_hz", default=None))
             else:
                 self.display = ConsoleDisplay()
         elif display_driver == "ili9488":
             from brailce.display.ili9488_display import ILI9488Display
             width = self.config.get("display", "width", default=480)
             height = self.config.get("display", "height", default=320)
-            self.display = ILI9488Display(width=width, height=height)
+            self.display = ILI9488Display(width=width, height=height,
+                                          spi_speed_hz=self.config.get("display", "spi_speed_hz", default=None))
         else:
             self.display = ConsoleDisplay()
 
         self.display.initialize()
+        try:
+            self.display.show_splash()
+        except Exception:
+            logger.debug("Splash screen failed.", exc_info=True)
 
         # ---- Speech ----
         if self.config.speech_enabled:
@@ -272,6 +278,8 @@ class BrailceApp:
             speech=self.speech,
             state=self.state,
             poll_seconds=poll_seconds,
+            critical_percent=float(self.config.get("power", "critical_battery_percent", default=5)),
+            on_critical=self._handle_critical_battery,
         )
         self.battery_poller.start()
 
@@ -500,22 +508,30 @@ class BrailceApp:
             if hasattr(self.display, "_current_query"):
                 self.display._current_query = ""
 
-        # Exit old mode
-        old_mode_instance = self._modes.get(old_mode)
-        if old_mode_instance:
-            old_mode_instance.on_exit()
-
-        # Enter new mode
-        new_mode_instance = self._modes.get(new_mode)
-        if new_mode_instance:
-            new_mode_instance.on_enter()
-            self._active_mode = new_mode_instance
-
-        # Update display & speak identical localized intro string through single queue
+        # Exit old mode, enter the new one and draw its screen as ONE LCD update.
+        # Without the batch, on_exit/on_enter/show_mode each sent a full frame over
+        # the slow SPI bus (~1 s each), so a mode switch visibly wiped 5-6 screens,
+        # including the OLD mode's screen again.
+        import contextlib
+        batch = getattr(self.display, "batch", None) if self.display else None
+        try:
+            ctx = batch() if callable(batch) else contextlib.nullcontext()
+        except Exception:
+            ctx = contextlib.nullcontext()
         intro_text = get_mode_intro(new_mode, language=self.state.language)
-        if self.display:
-            self.display.show_mode(new_mode)
-            self.display.show_status(intro_text)
+        with ctx:
+            old_mode_instance = self._modes.get(old_mode)
+            if old_mode_instance:
+                old_mode_instance.on_exit()
+
+            new_mode_instance = self._modes.get(new_mode)
+            if new_mode_instance:
+                new_mode_instance.on_enter()
+                self._active_mode = new_mode_instance
+
+            if self.display:
+                self.display.show_mode(new_mode)
+                self.display.show_status(intro_text)
 
         if self.speech:
             self.speech.speak_mode_intro(new_mode, interrupt=False)
@@ -566,6 +582,22 @@ class BrailceApp:
         )
         self.shutdown_button.register_callback(self._on_input_event)
         self.shutdown_button.start()
+
+    def _handle_critical_battery(self) -> None:
+        """Battery nearly empty and not charging: shut down cleanly before the UPS
+        cuts power (an abrupt cut can leave files on the SD card empty)."""
+        logger.warning("Battery critically low - starting safe shutdown.")
+        from brailce.i18n.strings import get_string
+        msg = get_string("BATTERY_CRITICAL_SHUTDOWN", self.state.language)
+        try:
+            if self.display:
+                self.display.show_status(msg)
+            if self.speech:
+                self.speech.speak_text(msg, interrupt=True)
+                time.sleep(4.0)
+        except Exception:
+            logger.debug("Critical battery announcement failed.", exc_info=True)
+        self._handle_shutdown_pressed()
 
     def _handle_shutdown_pressed(self) -> None:
         """

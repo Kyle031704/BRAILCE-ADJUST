@@ -212,7 +212,9 @@ class ILI9488Display(DisplayDevice):
         gpio_rst: int = 25,
         spi_port: int = 0,
         spi_device: int = 0,
+        spi_speed_hz: Optional[int] = None,
     ) -> None:
+        self._spi_speed_hz = int(os.environ.get("BRAILCE_SPI_HZ") or spi_speed_hz or 4000000)
         self._width = width
         self._height = height
         self._current_mode: Optional[AppMode] = None
@@ -336,7 +338,7 @@ class ILI9488Display(DisplayDevice):
                             device=self._spi_device,
                             gpio_DC=self._gpio_dc,
                             gpio_RST=self._gpio_rst,
-                            bus_speed_hz=int(os.environ.get("BRAILCE_SPI_HZ", "4000000")),
+                            bus_speed_hz=self._spi_speed_hz,
                             gpio=gpio_backend,
                         )
                         # ILI9488 natively requires landscape (480, 320) with rotate=0
@@ -358,8 +360,8 @@ class ILI9488Display(DisplayDevice):
                             self._device = driver_cls(serial, **dev_kwargs)
                         self._hardware_type = f"spi-{driver_mod}"
                         logger.info(
-                            "%s connected via direct SPI (DC=GPIO%d, RST=GPIO%d).",
-                            driver_mod.upper(), self._gpio_dc, self._gpio_rst
+                            "%s connected via direct SPI at %.0f MHz (DC=GPIO%d, RST=GPIO%d).",
+                            driver_mod.upper(), self._spi_speed_hz / 1e6, self._gpio_dc, self._gpio_rst
                         )
                 except Exception as exc:
                     self._init_error = f"{driver_mod}: {exc}"
@@ -1279,9 +1281,12 @@ class ILI9488Display(DisplayDevice):
                     if channels == 1:
                         arr_rgb = np.repeat(arr, 3, axis=-1)
                     elif channels in (3, 4):
+                        # Every camera driver delivers OpenCV BGR frames; PIL needs RGB.
+                        # (Showing BGR as RGB turned red Braille blue and green boards
+                        # yellow on the LCD.) SWAP_RED_BLUE flips this for odd hardware.
                         from brailce.vision.camera import SWAP_RED_BLUE
                         arr_rgb = arr[:, :, :3]
-                        if SWAP_RED_BLUE:
+                        if not SWAP_RED_BLUE:
                             arr_rgb = arr_rgb[:, :, ::-1]
                     else:
                         arr_rgb = arr[:, :, :3]
@@ -1432,6 +1437,23 @@ class ILI9488Display(DisplayDevice):
     # -------------------------------------------------------------------------
     # Status & Alerts (Unified Bottom Bar Geometry)
     # -------------------------------------------------------------------------
+
+    @_canvas_locked
+    def show_splash(self, message: str = "") -> None:
+        """Boot screen drawn as soon as the LCD is up, so the panel is not left white
+        while speech, camera and AI are still starting."""
+        if not self._draw:
+            return
+        w, h = self._width, self._height
+        self._draw.rectangle([(0, 0), (w, h)], fill=Palette.BG)
+        accent = (52, 211, 153)
+        # A Braille cell spelling "b" as the logo mark
+        self._braille_cell(w / 2 - 11, h / 2 - 78, {1, 2}, 22, 8, accent)
+        self._text_center(w / 2, h / 2 + 8, "BRAILCE", 34, True, Palette.TEXT)
+        self._text_center(w / 2, h / 2 + 50, message or "Starting...  ·  Nagsisimula...",
+                          15, False, Palette.TEXT_2)
+        self._layout = "splash"
+        self._flush_to_hardware()
 
     @_canvas_locked
     def show_status(self, message: str) -> None:

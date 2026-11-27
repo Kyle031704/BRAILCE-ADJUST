@@ -10,7 +10,8 @@ module makes speech louder without clipping:
      and it eats headroom. Speech intelligibility lives above 300 Hz.
   2. Gain of ``boost_db``.
   3. Look-ahead peak limiter with a smooth release, so peaks never pass
-     ``ceiling``: no hard clipping, no "basag" from the DAC.
+     ``ceiling``: no hard clipping, no "basag" from the DAC. The limiter may
+     squeeze at most MAX_REDUCTION_DB; sharper-peaked sounds get less boost.
 
 With ``boost_db <= 0`` the audio is returned untouched (exactly the old sound).
 
@@ -37,8 +38,12 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CEILING = 28000.0      # int16 peak ceiling after limiting (full scale = 32767)
 DEFAULT_HPF_HZ = 180.0
-LOOKAHEAD_MS = 2.0
-RELEASE_MS = 60.0
+LOOKAHEAD_MS = 5.0
+RELEASE_MS = 80.0
+# Most the limiter may squeeze any sound. Heavy, fast limiting is what made
+# sharp-peaked letters (o, s, f, x, m, 1) sound raspy at +12 dB; a sound whose
+# peaks would need more than this gets a smaller boost instead.
+MAX_REDUCTION_DB = 8.0
 
 
 def _highpass(x: np.ndarray, sr: int, fc: float) -> np.ndarray:
@@ -69,12 +74,37 @@ def _highpass(x: np.ndarray, sr: int, fc: float) -> np.ndarray:
     return y
 
 
-def _limiter_gain(x: np.ndarray, sr: int, ceiling: float) -> np.ndarray:
+PHASE_ROTATION_HZ = (100.0, 200.0, 400.0, 800.0)
+
+
+def _phase_rotate(x: np.ndarray, sr: int) -> np.ndarray:
+    """Chain of 1st-order all-pass filters. Same frequency content (sounds the same),
+    but the voice's lop-sided glottal peaks get flatter: ~1.5-2.5 dB less crest on
+    sharp letters, so they need less limiting for the same loudness."""
+    y = x
+    for fc in PHASE_ROTATION_HZ:
+        t = math.tan(math.pi * fc / sr)
+        a = (t - 1.0) / (t + 1.0)
+        out = np.empty_like(y)
+        x1 = y1 = 0.0
+        for i in range(y.size):
+            v = a * y[i] + x1 - a * y1
+            out[i] = v
+            x1 = y[i]
+            y1 = v
+        y = out
+    return y
+
+
+def _limiter_gain(x: np.ndarray, sr: int, ceiling: float,
+                  lookahead_ms: float = None, release_ms: float = None) -> np.ndarray:
     """Gain curve (<= 1) that keeps |x * gain| <= ceiling with smooth attack/release."""
+    lookahead_ms = LOOKAHEAD_MS if lookahead_ms is None else lookahead_ms
+    release_ms = RELEASE_MS if release_ms is None else release_ms
     need = np.minimum(1.0, ceiling / (np.abs(x) + 1e-9))
     if float(need.min()) >= 1.0:
         return np.ones_like(x)
-    look = max(1, int(sr * LOOKAHEAD_MS / 1000.0))
+    look = max(1, int(sr * lookahead_ms / 1000.0))
     # Look-ahead minimum over [n, n + look]
     gmin = need.copy()
     for k in range(1, look + 1):
@@ -86,7 +116,7 @@ def _limiter_gain(x: np.ndarray, sr: int, ceiling: float) -> np.ndarray:
     gavg = (csum[idx + 1] - csum[lo]) / (idx + 1 - lo)
     gavg = np.minimum(gavg, gmin)
     # Release back towards 1 (one-pole), never above the attack curve
-    rc = math.exp(-1.0 / (sr * RELEASE_MS / 1000.0))
+    rc = math.exp(-1.0 / (sr * release_ms / 1000.0))
     g = np.empty_like(gavg)
     prev = 1.0
     for i in range(gavg.size):
@@ -98,15 +128,25 @@ def _limiter_gain(x: np.ndarray, sr: int, ceiling: float) -> np.ndarray:
 
 
 def master_samples(samples: np.ndarray, sr: int, boost_db: float,
-                   ceiling: float = DEFAULT_CEILING, hpf_hz: float = DEFAULT_HPF_HZ) -> np.ndarray:
-    """Return int16 samples made louder by boost_db without exceeding ceiling."""
+                   ceiling: float = DEFAULT_CEILING, hpf_hz: float = DEFAULT_HPF_HZ,
+                   phase_rotation: bool = True, max_reduction_db: float = None,
+                   lookahead_ms: float = None, release_ms: float = None) -> np.ndarray:
+    """Return int16 samples made louder by boost_db without exceeding ceiling.
+    The keyword options exist for A/B listening tests; defaults are the tuned values."""
     s = np.asarray(samples)
     if boost_db <= 0 or s.size == 0:
         return s.astype(np.int16, copy=False)
     x = s.astype(np.float64)
     x = _highpass(x, sr, hpf_hz)
+    if phase_rotation:
+        x = _phase_rotate(x, sr)
+    cap = MAX_REDUCTION_DB if max_reduction_db is None else max_reduction_db
+    peak = float(np.abs(x).max())
+    if peak > 1.0 and cap is not None and cap >= 0:
+        allowed = 20.0 * math.log10(ceiling / peak) + cap
+        boost_db = min(boost_db, max(0.0, allowed))
     x *= 10.0 ** (boost_db / 20.0)
-    x *= _limiter_gain(x, sr, ceiling)
+    x *= _limiter_gain(x, sr, ceiling, lookahead_ms, release_ms)
     return np.clip(np.round(x), -ceiling, ceiling).astype(np.int16)
 
 
@@ -175,7 +215,7 @@ class SpeakerMaster:
             return src
         try:
             st = os.stat(src)
-            key = f"{os.path.abspath(src)}|{st.st_mtime_ns}|{st.st_size}|{cls.boost_db}|{cls.ceiling}|{cls.hpf_hz}"
+            key = f"v3|{os.path.abspath(src)}|{st.st_mtime_ns}|{st.st_size}|{cls.boost_db}|{cls.ceiling}|{cls.hpf_hz}"
             name = hashlib.sha1(key.encode("utf-8")).hexdigest()[:20] + ".wav"
             os.makedirs(cls.cache_dir, exist_ok=True)
             dst = os.path.join(cls.cache_dir, name)

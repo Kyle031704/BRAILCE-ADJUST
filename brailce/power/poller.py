@@ -33,7 +33,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from brailce.i18n.strings import get_string
 from brailce.power.base import PowerMonitor, PowerStatus
@@ -59,6 +59,9 @@ class BatteryPoller:
         state: Any = None,
         poll_seconds: float = 30.0,
         min_announce_interval_s: float = MIN_ANNOUNCE_INTERVAL_S,
+        critical_percent: float = 0.0,
+        on_critical: Optional[Callable[[], None]] = None,
+        critical_polls: int = 3,
     ) -> None:
         self._monitor = monitor
         self._display = display
@@ -75,6 +78,12 @@ class BatteryPoller:
         self._armed = {t: True for t in ANNOUNCE_THRESHOLDS}
         self._prev_charging: Optional[bool] = None
         self._full_announced_this_session = False
+        # critical battery: N consecutive low, not-charging polls -> on_critical() once
+        self._critical_percent = max(0.0, float(critical_percent))
+        self._on_critical = on_critical
+        self._critical_polls = max(1, int(critical_polls))
+        self._critical_streak = 0
+        self._critical_fired = False
 
     # ---- lifecycle ----
 
@@ -111,6 +120,21 @@ class BatteryPoller:
                 logger.exception("Battery poll cycle failed.")
             self._stop_event.wait(self._poll_seconds)
 
+    def _check_critical(self, pct: float, charging: bool) -> None:
+        if self._on_critical is None or self._critical_percent <= 0 or self._critical_fired:
+            return
+        if not charging and pct <= self._critical_percent:
+            self._critical_streak += 1
+        else:
+            self._critical_streak = 0
+        if self._critical_streak >= self._critical_polls:
+            self._critical_fired = True
+            logger.warning("Battery at %s%% for %d polls and not charging.", pct, self._critical_streak)
+            try:
+                self._on_critical()
+            except Exception:
+                logger.exception("Critical battery handler failed.")
+
     # ---- polling ----
 
     def poll_once(self) -> Optional[PowerStatus]:
@@ -130,6 +154,9 @@ class BatteryPoller:
         if pct is None:
             # No real battery data: nothing to show or announce.
             return status
+
+        # 0. Critical battery: shut down cleanly before the UPS cuts power.
+        self._check_critical(pct, charging)
 
         # 1. Real-time display indicator refresh.
         if self._display is not None:
