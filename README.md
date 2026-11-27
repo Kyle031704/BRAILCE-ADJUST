@@ -54,6 +54,8 @@ Quick language toggle: press `Backspace`+`Space` (or `Space`+`Backspace`) within
 
 ### Safe Shutdown
 
+**Keypad-only safe shutdown:** press `Backspace` + `Enter` together; the device asks for confirmation; press `Backspace` + `Enter` again within 6 s to power off safely.
+
 **Never cut power to a running Pi** - flipping a hard power switch while the app is running can corrupt the SD card. Power the device OFF with one of the safe paths instead; flip the hard power switch only AFTER the shutdown announcement has played and the Pi has powered itself off.
 
 | Key / Button | Action |

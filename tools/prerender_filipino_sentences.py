@@ -47,6 +47,9 @@ def spoken_texts() -> List[str]:
     spoken += [format_spoken_question(q, "fil") for q in fil_questions]
     # The answer, via AIAssistantMode._finish_processing -> speak_response_text
     spoken += [clean_ai_response(a) or a for a in answers]
+    # Device prompts spoken through the Filipino sentence path
+    from brailce.i18n.strings import get_string
+    spoken.append(get_string("SHUTDOWN_CONFIRM_PROMPT", "fil"))
     out, seen = [], set()
     for s in spoken:
         t = normalize_response_text(s)

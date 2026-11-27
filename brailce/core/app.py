@@ -92,6 +92,8 @@ class BrailceApp:
         # Safe shutdown (Ctrl+P / GPIO long-press / Backspace+Power combo) fires exactly once per run
         self._shutdown_requested: bool = False
         self._last_backspace_time: float = 0.0
+        self._last_enter_time: float = 0.0
+        self._keypad_shutdown_deadline: float = 0.0
         self._last_power_button_time: float = 0.0
 
     # ---- Lifecycle ----
@@ -418,6 +420,18 @@ class BrailceApp:
                     logger.info("Backspace + Power Button combo detected -> initiating safe shutdown.")
                     self._handle_shutdown_pressed()
                     return
+                if (now - getattr(self, "_last_enter_time", 0.0)) < self.KEYPAD_SHUTDOWN_COMBO_S:
+                    # Enter came first (it already reached the mode); Backspace completes the combo
+                    self._handle_keypad_shutdown_combo()
+                    return
+
+            if event.event_type == EventType.ENTER_PRESSED:
+                now = time.time()
+                self._last_enter_time = now
+                if (now - self._last_backspace_time) < self.KEYPAD_SHUTDOWN_COMBO_S:
+                    # Backspace + Enter together: shutdown request, NOT a scan / submit
+                    self._handle_keypad_shutdown_combo()
+                    return
 
             if event.event_type == EventType.STOP_PRESSED:
                 # Esc: stop speech and the current mode activity without quitting
@@ -582,6 +596,36 @@ class BrailceApp:
         )
         self.shutdown_button.register_callback(self._on_input_event)
         self.shutdown_button.start()
+
+    # Backspace + Enter pressed together (within this window) = keypad-only shutdown
+    # request; it must be repeated within KEYPAD_SHUTDOWN_CONFIRM_S to power off.
+    KEYPAD_SHUTDOWN_COMBO_S = 0.35
+    KEYPAD_SHUTDOWN_CONFIRM_S = 6.0
+
+    def _handle_keypad_shutdown_combo(self) -> None:
+        """Safe shutdown from the keypad alone (no power button or switch needed):
+        first Backspace + Enter asks for confirmation, a second one within
+        KEYPAD_SHUTDOWN_CONFIRM_S shuts down. Prevents accidental power-offs."""
+        now = time.time()
+        self._last_backspace_time = 0.0
+        self._last_enter_time = 0.0
+        deadline = getattr(self, "_keypad_shutdown_deadline", 0.0)
+        if deadline and now <= deadline:
+            self._keypad_shutdown_deadline = 0.0
+            logger.info("Backspace + Enter confirmed -> initiating safe shutdown.")
+            self._handle_shutdown_pressed()
+            return
+        self._keypad_shutdown_deadline = now + self.KEYPAD_SHUTDOWN_CONFIRM_S
+        logger.info("Backspace + Enter pressed -> asking for confirmation.")
+        from brailce.i18n.strings import get_string
+        msg = get_string("SHUTDOWN_CONFIRM_PROMPT", self.state.language)
+        try:
+            if self.display:
+                self.display.show_status(msg)
+            if self.speech:
+                self.speech.speak_text(msg, interrupt=True)
+        except Exception:
+            logger.debug("Shutdown confirmation prompt failed.", exc_info=True)
 
     def _handle_critical_battery(self) -> None:
         """Battery nearly empty and not charging: shut down cleanly before the UPS

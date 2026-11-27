@@ -1,0 +1,219 @@
+BRAILCE - BUOD NG MGA PINAGAWA AT INAYOS
+=========================================
+Petsa: Nobyembre 27-28, 2026
+Folder: C:\Users\MARK\Downloads\BRAILCE-ADJUST
+GitHub: https://github.com/Kyle031704/BRAILCE-ADJUST (branch: master)
+Device: Raspberry Pi 5 (raspberrypi5.local), app sa ~/BRAILCE-ADJUST, service: brailce.service
+
+Mas detalyadong teknikal na tala: CHANGES.md (Section O at P).
+
+
+------------------------------------------------------------
+1. MGA PINAGAWA MO AT ANG NAGING RESULTA
+------------------------------------------------------------
+
+ 1. Tiyakin kung tugma ang folder sa GitHub repo
+    -> Oo, eksaktong tugma noong simula (parehong git tree hash, commit 7e98b75).
+
+ 2. Bakit luma ang dating ng UI
+    -> Sanhi: walang "import os" sa display code, kaya hindi na-load ang font at
+       ang maliit na 10px default font ng Pillow ang ginamit; ang mga simbolo
+       (bullet, kidlat, atbp.) ay naging kahon; nagpapatong ang mga panel sa Math.
+    -> Inayos: DejaVu Sans na font, bagong disenyo ng lahat ng mode (rounded
+       cards, isang kulay bawat mode, keycap hints), tamang Braille cells,
+       Filipino na mga label, malinis na Math screen.
+
+ 3. Kaya bang basahin ang ibang kulay na Braille
+    -> Hindi dati (pula at berde ay halos pareho sa grayscale).
+    -> Inayos: may color mode na ang scanner. Kusang pinipili ang kulay kapag
+       magkaiba ang kulay pero pareho ang liwanag ng dots at board. Hindi
+       nagbago ang pagbasa sa puting papel.
+
+ 4. Printable test sheet para sa scanner
+    -> tools/test_sheets/brailce_scanner_test_sheets.pdf (4 na pahina: pula sa
+       berde at itim sa puti, malaki at standard na Braille, may answer key).
+
+ 5. Tanggalin ang Arial font
+    -> Tinanggal ang BrailceDefault.ttf (kopya ito ng Arial, bawal ipamigay).
+
+ 6. Mga command para mag-test, mag-deploy at mag-upload
+    -> tools/test_deploy_push.ps1: iisang command para sa test, deploy sa Pi,
+       restart ng app, upload sa GitHub, at live log ng Pi.
+
+ 7. IP ng Pi
+    -> Gamitin ang pangalang raspberrypi5.local sa .env (nagbabago ang IP).
+
+ 8. I-upload sa GitHub nang diretso sa master (hindi branch)
+    -> Ginawa; naka-set na ang script sa master.
+
+ 9. Palakasin ang speaker nang malinis
+    -> Sanhi: walang volume control ang I2S amp (MAX98357A), kaya walang epekto
+       ang "volume" sa config.
+    -> Inayos: pampalakas na may high-pass, phase rotation at malambot na
+       limiter (walang clipping). Pinili mo ang +12 dB ("five") sa listening test.
+
+10. Scanner UI na parang nagglitch
+    -> Sanhi: salitan ang dalawang buong screen habang nagbabasa, at mabagal
+       ang SPI (4 MHz, mga 1 segundo bawat buong screen).
+    -> Inayos: iisang screen habang nagbabasa, canvas lock, partial refresh,
+       at LCD sa 16 MHz.
+
+11. Mas mabilis na scanner sa Filipino
+    -> Sanhi: ang salitang walang recording ay kinukuha pa sa internet.
+    -> Inayos: inihahanda na ang boses ng salita habang binibigkas ang mga
+       letra.
+
+12. Linisin ang UI sa pagpapalit ng mode
+    -> Sanhi: 5-6 na buong redraw bawat pagpapalit, pati ang screen ng dating
+       mode.
+    -> Inayos: isang beses na lang ang redraw (batch).
+
+13. Hindi binanggit ang "tunay" pagkatapos ng mga letra
+    -> Sanhi: 10 segundo ang pagkuha ng boses mula sa internet, at hindi
+       hinintay ng scanner ang salita.
+    -> Inayos: hinihintay na ng scanner ang salita (may 6 segundong limit at
+       offline na fallback).
+
+14. Palawakin ang bokabularyo + listahan sa txt
+    -> 617 -> 950 na Filipino na salitang may recording (Blessica voice).
+    -> Mga listahan: listahan/lahat_ng_salita.txt,
+       listahan/mga_bagong_salita.txt
+    -> English: kahit anong salita ay kayang bigkasin ng Piper (offline).
+
+15. Listahan ng alam na tanong ng AI Assistant
+    -> listahan/ai_assistant_mga_tanong.txt
+    -> Dinagdagan: +41 Filipino, +46 English na tanong para sa Grade 1
+       (kabuuan: 87 Filipino, 98 English).
+
+16. Hindi natural ang daloy ng sagot ng AI sa Filipino
+    -> Sanhi: pumapalya ang Edge-TTS sa Pi (kulang ang miniaudio at scipy),
+       kaya pinagdudugtong ang recording ng bawat salita; nase-save pa ito
+       bilang permanenteng cache.
+    -> Inayos: na-install ang miniaudio sa Pi; numpy na kapag walang scipy;
+       hindi na sine-save ang pinagdugtong na fallback; ginawa nang maaga ang
+       natural na boses ng lahat ng 168 na Filipino na tanong at sagot.
+
+17. Malalim at mabagal na boses ng AI (pagkatapos ng #16)
+    -> Sanhi: binasa ang stereo audio bilang mono, kaya doble ang haba.
+    -> Inayos: tamang pagbasa (mono, 22050 Hz); ginawa ulit ang lahat.
+
+18. Ang tanong na ipinadala sa AI ay hindi maayos ang bigkas
+    -> Sanhi: binibigkas eksakto sa pagka-type ("ANO ANG ULAN", walang "?").
+    -> Inayos: ginagawang "Ano ang ulan?" bago bigkasin.
+
+19. Mga letrang o, s, f, x, m, 1 na hindi malinis
+    -> Sanhi: may lumang tool na pinabilis ang mga letra sa magaspang na
+       paraan (hal. M: 0.85 -> 0.65 segundo).
+    -> Inayos: ginawa ulit nang malinis. Pagkatapos, ayon sa gusto mo, ginamit
+       ang English na bigkas (en-PH-Rosa) para sa s, f, m, o.
+
+20. Ang "0" na iba ang tono
+    -> Sinubukan ang ilang bersyon; pinili mong ibalik sa dati. Walang binago.
+
+21. "AI Assistant Mode" sa Filipino na intro
+    -> Inayos: Ingles na ang bigkas ng "AI Assistant Mode" (Rosa), at Filipino
+       pa rin ang kasunod na paliwanag.
+
+22. Maling Braille ng + at * sa LCD
+    -> Sanhi: halo-halo ang Nemeth at UEB, at kulang pa ang ilang simbolo.
+    -> Inayos: UEB na ayon sa reference mo:
+         +  = dot 5, tapos dots 2-3-5
+         -  = dot 5, tapos dots 3-6
+         *  = dot 5, tapos dots 2-3-6
+         /  = dot 5, tapos dots 3-4
+         =  = dot 5, tapos dots 2-3-5-6
+
+23. Bug sa Scanner mode pagkapalit ng wika
+    -> Sanhi: laging Filipino ang pill sa itaas ng camera preview.
+    -> Inayos: sumusunod na ito sa wika (English o Filipino).
+
+24. Power switch at pagpatay
+    -> Paliwanag: latching ang switch sa X1203, kaya ang UPS hardware ang
+       nagbubukas sa Pi kapag sinaksak ang USB-C. Hindi mo gustong palitan ang
+       switch, kaya walang binago rito.
+    -> Ligtas na pagpatay: Backspace + Power -> hintayin ang "Paalam" at ang
+       pagputi ng screen -> saka i-OFF ang switch.
+    -> Idinagdag: pagpatay gamit lang ang keypad (walang switch o power button):
+       Backspace + Enter nang sabay -> sasabihin "Pindutin ulit..." -> Backspace +
+       Enter ulit sa loob ng 6 segundo -> ligtas na shutdown.
+    -> Idinagdag: splash screen ("BRAILCE / Nagsisimula...") at awtomatikong
+       ligtas na shutdown kapag 5% na lang ang baterya at hindi nagcha-charge.
+    -> Hindi ginalaw ayon sa desisyon mo: fsck.mode=force (mas matagal ang boot
+       pero mas ligtas) at WAIT_FOR_POWER_BUTTON=0.
+
+
+------------------------------------------------------------
+2. MGA PROBLEMANG NAKITA AT INAYOS HABANG NAGTATRABAHO
+------------------------------------------------------------
+
+ - Namatay ang Pi habang nagde-deploy, kaya 1,057 na file ang naging 0 bytes at
+   puti ang screen. Inayos: in-upload ulit ang lahat; may "sync" na ang deploy
+   para hindi na maulit.
+ - Mali ang folder ng deploy (~/brailce sa halip na ~/BRAILCE-ADJUST), at hindi
+   isinasama ang mga font. Inayos.
+ - Lumang SSH key ng Pi sa Windows (sinuri muna ang fingerprint bago palitan).
+ - Pula na lumalabas na asul sa camera preview (BGR/RGB). Inayos.
+ - "Access violation" sa tests (binubuksan ang totoong webcam ng PC). Inayos.
+ - Iisang commit message sa lahat ng upload. May -Message na ang script.
+ - Wala pang Git name at email sa PC. Naka-set na para sa repo na ito lang
+   (MARK <mark@brailce.local>).
+ - Low battery (13%) habang nagde-deploy. Laging tinitingnan na ang baterya
+   bago mag-deploy.
+
+
+------------------------------------------------------------
+3. MGA BAGONG FILE AT TOOL
+------------------------------------------------------------
+
+ tools/test_deploy_push.ps1          test + deploy + restart + GitHub + log
+ tools/render_screens.py --all OUT   larawan ng bawat screen ng LCD
+ tools/make_color_test_sheet.py      printable test sheet
+ tools/loudness_listen_test.py       pakikinig sa iba't ibang lakas (sa Pi)
+ tools/loudness_ab_letters.py        A/B ng mga letra (sa Pi)
+ tools/add_filipino_words.py         magdagdag ng Filipino na salita
+ tools/filipino_vocabulary_source.txt  listahan ng salitang ire-record
+ tools/make_vocabulary_lists.py      i-update ang mga listahan sa listahan/
+ tools/prerender_filipino_sentences.py  natural na boses ng tanong at sagot
+ brailce/speech/speaker_master.py    pampalakas ng speaker
+ debug_scan/raw_*.jpg (sa Pi)        orihinal na kuha ng bawat scan
+
+
+------------------------------------------------------------
+4. MGA HINIHINTAY PA / HINDI PA TAPOS
+------------------------------------------------------------
+
+ 1. Scanner: iisang letra at 2-letrang salita ("in", "na", "ng"...)
+    - Nakita: madalas ang naka-print na salita ang nasa loob ng box, o masyadong
+      malapit ang camera kaya naputol ang cell.
+    - Kailangan: i-scan ang "in", "na" at ilang letra (2-3 beses bawat isa,
+      dots ang nasa loob ng box), para makuha ko ang raw na kuha at maayos ang
+      engine.
+ 2. Desisyon: gawing UEB din ang mga numero? (Nemeth pa ngayon: 1 = dot 2.
+    UEB: number sign + a-j, hal. 14 = number sign, a, d.)
+ 3. I-upload sa GitHub ang mga huling pagbabago.
+
+
+------------------------------------------------------------
+5. MGA COMMAND
+------------------------------------------------------------
+
+ Lahat ng ito ay sa PowerShell sa PC (hindi sa PuTTY):
+
+   cd C:\Users\MARK\Downloads\BRAILCE-ADJUST
+
+ Lahat (test, deploy, GitHub):
+   powershell -ExecutionPolicy Bypass -File tools\test_deploy_push.ps1 -Message "Ano ang binago"
+
+ GitHub lang (tapos na ang test at deploy):
+   powershell -ExecutionPolicy Bypass -File tools\test_deploy_push.ps1 -SkipTests -SkipDeploy -Message "Ano ang binago"
+
+ Magdagdag ng Filipino na salita:
+   1) idagdag sa tools\filipino_vocabulary_source.txt (isa bawat linya)
+   2) python tools/add_filipino_words.py tools/filipino_vocabulary_source.txt
+   3) python tools/make_vocabulary_lists.py
+   4) patakbuhin ang "Lahat" na command sa itaas
+
+ Ligtas na pagpatay ng device:
+   Backspace + Power -> hintayin ang "Paalam" -> saka i-OFF ang switch
+   O gamit lang ang keypad: Backspace + Enter, tapos Backspace + Enter ulit
+   (sa loob ng 6 segundo)

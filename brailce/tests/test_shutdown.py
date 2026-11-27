@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import queue
 import sys
+import time
 import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -573,3 +574,60 @@ class TestLatchingPowerSwitch:
         mock_sub.run.assert_called_once()
 
 
+
+
+class TestBackspaceEnterKeypadShutdown:
+    """Keypad-only shutdown: Backspace + Enter twice (confirm) within 6 s."""
+
+    def _app(self):
+        app = _app()
+        calls = []
+        app._handle_shutdown_pressed = lambda: calls.append("shutdown")
+        app._active_mode = MagicMock()
+        return app, calls
+
+    def test_first_combo_only_asks_for_confirmation(self) -> None:
+        app, calls = self._app()
+        app._on_input_event(control_event(EventType.BACKSPACE_PRESSED, "test"))
+        app._on_input_event(control_event(EventType.ENTER_PRESSED, "test"))
+        assert calls == []
+        assert app._keypad_shutdown_deadline > 0
+
+    def test_second_combo_within_window_shuts_down(self) -> None:
+        app, calls = self._app()
+        for _ in range(2):
+            app._on_input_event(control_event(EventType.BACKSPACE_PRESSED, "test"))
+            app._on_input_event(control_event(EventType.ENTER_PRESSED, "test"))
+        assert calls == ["shutdown"]
+
+    def test_enter_then_backspace_also_counts(self) -> None:
+        app, calls = self._app()
+        for _ in range(2):
+            app._on_input_event(control_event(EventType.ENTER_PRESSED, "test"))
+            app._on_input_event(control_event(EventType.BACKSPACE_PRESSED, "test"))
+        assert calls == ["shutdown"]
+
+    def test_expired_confirmation_starts_over(self) -> None:
+        app, calls = self._app()
+        app._on_input_event(control_event(EventType.BACKSPACE_PRESSED, "test"))
+        app._on_input_event(control_event(EventType.ENTER_PRESSED, "test"))
+        app._keypad_shutdown_deadline = time.time() - 1.0   # 6 s passed
+        app._on_input_event(control_event(EventType.BACKSPACE_PRESSED, "test"))
+        app._on_input_event(control_event(EventType.ENTER_PRESSED, "test"))
+        assert calls == []
+
+    def test_combo_enter_is_not_sent_to_the_mode(self) -> None:
+        app, calls = self._app()
+        app._on_input_event(control_event(EventType.BACKSPACE_PRESSED, "test"))
+        app._active_mode.handle_event.reset_mock()
+        app._on_input_event(control_event(EventType.ENTER_PRESSED, "test"))
+        app._active_mode.handle_event.assert_not_called()   # no scan / AI submit
+
+    def test_separate_backspace_and_enter_stay_normal_keys(self) -> None:
+        app, calls = self._app()
+        app._on_input_event(control_event(EventType.BACKSPACE_PRESSED, "test"))
+        app._last_backspace_time = time.time() - 1.0        # pressed a second ago
+        app._on_input_event(control_event(EventType.ENTER_PRESSED, "test"))
+        assert calls == []
+        assert app._keypad_shutdown_deadline == 0.0
+        assert app._active_mode.handle_event.called

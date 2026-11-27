@@ -95,6 +95,10 @@ STRINGS: Dict[str, Dict[str, str]] = {
         # every word has a cached Filipino WAV (test_filipino_math cache-coverage check)
         "fil": "Kaunti na ang natitirang lakas. Pinapatay na ang Brailce.",
     },
+    "SHUTDOWN_CONFIRM_PROMPT": {
+        "en": "Press Backspace and Enter again to turn off Brailce.",
+        "fil": "Pindutin ulit ang Backspace at Enter para patayin ang Brailce.",
+    },
     "SHUTDOWN_ANNOUNCE": {
         "en": "Shutting down. Goodbye.",
         "fil": "Pinapatay na ang Brailce. Paalam.",

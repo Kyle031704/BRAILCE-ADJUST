@@ -567,3 +567,6 @@ tumatama
 tumutukoy
 tuwid
 urano
+
+# --- Mga mensahe ng device / device prompts ---
+patayin
