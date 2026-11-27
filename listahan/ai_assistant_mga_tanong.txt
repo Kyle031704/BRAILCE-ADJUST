@@ -1,0 +1,391 @@
+BRAILCE AI ASSISTANT - MGA TANONG NA ALAM SAGUTIN
+============================================================
+
+PAANO GUMAGANA:
+1. Mga tanong sa listahang ito: agad at laging tama ang sagot (naka-built-in).
+   Dapat eksakto ang mga salita (hindi mahalaga ang malaki/maliit na titik
+   at ang tandang pananong). Hal. "What is Braille?" = "what is braille".
+2. Mga tanong sa matematika: kahit anong numero, hal. "what is 7 + 8",
+   "ano ang 12 - 5", "3 * 4", "10 / 2" - sasagutin ng Math solver.
+3. Ibang tanong: sinasagot ng offline AI model sa Pi
+   (liquidai/lfm2.5-1.2b-instruct). Kaya nitong sagutin ang maraming
+   pangkalahatang tanong, pero maliit na model ito: maaaring mali o
+   hindi kumpleto ang sagot, at mas mabagal (ilang segundo).
+4. Sa Filipino mode, ang AI ay sumasagot sa Filipino; kapag Ingles ang
+   naging sagot, inuulit ito o nagbibigay ng paalala.
+
+FILIPINO (87 tanong)
+------------------------------------------------------------
+  1. ano ang 1 dagdagan ng 1
+     -> Ang 1 dagdag 1 ay 2.
+  2. ano ang 10 bawas 5
+     -> Ang 10 bawas 5 ay 5.
+  3. ano ang 2 dagdagan ng 2
+     -> Ang 2 dagdag 2 ay 4.
+  4. ano ang 5 dagdagan ng 5
+     -> Ang 5 dagdag 5 ay 10.
+  5. ano ang araw
+     -> Ang Araw ay ang bituin sa gitna ng ating sistemang solar na nagbibigay ng liwanag at init.
+  6. ano ang bahaghari
+     -> Ang bahaghari ay mga kulay sa langit na lumalabas kapag tumatama ang sikat ng araw sa patak ng ulan.
+  7. ano ang bilog
+     -> Ang bilog ay hugis na walang sulok at walang tuwid na gilid.
+  8. ano ang brailce
+     -> Ang Brailce ay isang kagamitan at katulong sa pag-aaral ng Braille.
+  9. ano ang braille
+     -> Ang Braille ay isang sistema ng pagbasa at pagsulat gamit ang mga nakataas na tuldok para sa mga bulag.
+ 10. ano ang buwan
+     -> Ang Buwan ay ang likas na satelayt na umiikot sa planetang Daigdig.
+ 11. ano ang gamit ng dila
+     -> Ginagamit natin ang dila upang malasahan ang pagkain.
+ 12. ano ang gamit ng ilong
+     -> Ginagamit natin ang ilong upang makaamoy.
+ 13. ano ang gamit ng mata
+     -> Ginagamit natin ang mata upang makakita.
+ 14. ano ang gamit ng tainga
+     -> Ginagamit natin ang tainga upang makarinig.
+ 15. ano ang grade 1 braille
+     -> Ang Grade 1 Braille ay titik-sa-titik na pagsasalin kung saan bawat karakter ay may katumbas na titik nang walang pagpapaikli.
+ 16. ano ang kabisera ng pilipinas
+     -> Ang Maynila ang kabisera ng Pilipinas.
+ 17. ano ang kailangan ng halaman
+     -> Kailangan ng halaman ang sikat ng araw, tubig, hangin, at lupa upang lumaki.
+ 18. ano ang limang pandama
+     -> Ang limang pandama ay paningin, pandinig, pang-amoy, panlasa, at pansalat.
+ 19. ano ang linggo
+     -> Ang linggo ay may pitong araw mula Linggo hanggang Sabado, at ito rin ang unang araw ng sanlinggo.
+ 20. ano ang mga araw sa isang linggo
+     -> Ang mga araw sa isang linggo ay Linggo, Lunes, Martes, Miyerkules, Huwebes, Biyernes, at Sabado.
+ 21. ano ang mga buwan sa isang taon
+     -> Ang mga buwan ay Enero, Pebrero, Marso, Abril, Mayo, Hunyo, Hulyo, Agosto, Setyembre, Oktubre, Nobyembre, at Disyembre.
+ 22. ano ang mga kulay ng bahaghari
+     -> Ang mga kulay ng bahaghari ay pula, kahel, dilaw, berde, asul, indigo, at lila.
+ 23. ano ang mga panahon sa pilipinas
+     -> Dalawa ang panahon sa Pilipinas: tag-init at tag-ulan.
+ 24. ano ang mga pangunahing kulay
+     -> Ang mga pangunahing kulay ay pula, dilaw, at asul.
+ 25. ano ang mga planeta
+     -> Ang mga planeta ay Merkuryo, Benus, Daigdig, Marte, Hupiter, Saturno, Urano, at Neptuno.
+ 26. ano ang pambansang bayani ng pilipinas
+     -> Si Doktor Jose Rizal ang ating pambansang bayani.
+ 27. ano ang pambansang bulaklak ng pilipinas
+     -> Ang Sampaguita ang pambansang bulaklak ng Pilipinas.
+ 28. ano ang pambansang hayop ng pilipinas
+     -> Ang kalabaw ang pambansang hayop ng Pilipinas.
+ 29. ano ang pambansang ibon ng pilipinas
+     -> Ang Agila ng Pilipinas ang ating pambansang ibon.
+ 30. ano ang pambansang isda ng pilipinas
+     -> Ang bangus ang pambansang isda ng Pilipinas.
+ 31. ano ang pambansang prutas ng pilipinas
+     -> Ang mangga ang pambansang prutas ng Pilipinas.
+ 32. ano ang pambansang puno ng pilipinas
+     -> Ang narra ang pambansang puno ng Pilipinas.
+ 33. ano ang pambansang wika ng pilipinas
+     -> Filipino ang pambansang wika ng Pilipinas.
+ 34. ano ang pandiwa
+     -> Ang pandiwa ay salitang nagsasaad ng kilos, tulad ng takbo, kain, at basa.
+ 35. ano ang pangalan mo
+     -> Ako si Brailce, ang iyong matalinong katulong sa pag-aaral ng Braille.
+ 36. ano ang pangngalan
+     -> Ang pangngalan ay salitang tumutukoy sa tao, hayop, bagay, o lugar.
+ 37. ano ang pinakamalaking hayop
+     -> Ang asul na balyena ang pinakamalaking hayop sa mundo.
+ 38. ano ang pinakamalaking karagatan
+     -> Ang Karagatang Pasipiko ang pinakamalaking karagatan sa mundo.
+ 39. ano ang pinakamalaking planeta
+     -> Ang Hupiter ang pinakamalaking planeta sa sistemang solar.
+ 40. ano ang pinakamalapit na bituin sa mundo
+     -> Ang Araw ang pinakamalapit na bituin sa ating Daigdig.
+ 41. ano ang pinakamaliit na planeta
+     -> Ang Merkuryo ang pinakamaliit na planeta sa sistemang solar.
+ 42. ano ang pinakamataas na hayop
+     -> Ang dyirap ang pinakamataas na hayop.
+ 43. ano ang tubig
+     -> Ang tubig ay likidong mahalaga sa buhay na binubuo ng hidroheno at oksiheno.
+ 44. ano ang ulan
+     -> Ang ulan ay tubig na bumabagsak mula sa mga ulap.
+ 45. ano ang uncontracted braille
+     -> Ang uncontracted Braille ay kilala rin bilang Grade 1 Braille na nagbabaybay ng bawat titik nang buo.
+ 46. bakit kailangan maghugas ng kamay
+     -> Naghuhugas tayo ng kamay upang maalis ang mga mikrobyo na nagdudulot ng sakit.
+ 47. bakit kailangan matulog
+     -> Kailangan nating matulog upang makapagpahinga at lumakas ang ating katawan.
+ 48. bakit kailangan uminom ng tubig
+     -> Kailangan ng ating katawan ang tubig upang manatiling malusog.
+ 49. ilan ang araw sa isang linggo
+     -> Mayroong pitong araw sa isang linggo: Linggo, Lunes, Martes, Miyerkules, Huwebes, Biyernes, at Sabado.
+ 50. ilan ang gilid ng parisukat
+     -> Ang parisukat ay may apat na magkakapantay na gilid.
+ 51. ilan ang gilid ng tatsulok
+     -> Ang tatsulok ay may tatlong gilid.
+ 52. ilan ang kontinente
+     -> Mayroong pitong kontinente sa mundo.
+ 53. ilan ang paa ng aso
+     -> Ang aso ay may apat na paa.
+ 54. ilan ang paa ng gagamba
+     -> Ang gagamba ay may walong paa.
+ 55. ilan ang paa ng insekto
+     -> Ang insekto ay may anim na paa.
+ 56. ilan ang paa ng manok
+     -> Ang manok ay may dalawang paa.
+ 57. ilan ang planeta
+     -> Mayroong walong planeta sa ating sistemang solar.
+ 58. ilan ang planeta sa sistemang solar
+     -> Mayroong walong planeta sa ating sistemang solar.
+ 59. ilan ang titik sa alpabetong filipino
+     -> Mayroong 28 titik sa modernong alpabetong Filipino.
+ 60. ilan ang titik sa alpabetong ingles
+     -> Mayroong 26 na titik sa alpabetong Ingles.
+ 61. ilang araw mayroon sa isang linggo
+     -> Mayroong pitong araw sa isang linggo: Linggo, Lunes, Martes, Miyerkules, Huwebes, Biyernes, at Sabado.
+ 62. ilang araw mayroon sa isang taon
+     -> Mayroong 365 na araw sa isang karaniwang taon.
+ 63. ilang araw sa isang linggo
+     -> Mayroong pitong araw sa isang linggo: Linggo, Lunes, Martes, Miyerkules, Huwebes, Biyernes, at Sabado.
+ 64. ilang buwan mayroon sa isang taon
+     -> Mayroong labindalawang buwan sa isang taon mula Enero hanggang Disyembre.
+ 65. ilang buwan sa isang taon
+     -> Mayroong labindalawang buwan sa isang taon mula Enero hanggang Disyembre.
+ 66. ilang minuto sa isang oras
+     -> Mayroong animnapung minuto sa isang oras.
+ 67. ilang oras mayroon sa isang araw
+     -> Mayroong 24 na oras sa loob ng isang araw.
+ 68. ilang segundo sa isang minuto
+     -> Mayroong animnapung segundo sa isang minuto.
+ 69. ilang tuldok mayroon sa isang braille cell
+     -> Mayroong anim na nakataas na tuldok ang isang karaniwang Braille cell sa dalawang hanay.
+ 70. kailan naimbento ang braille
+     -> Naimbento ang sistemang Braille noong taong 1824.
+ 71. kumusta
+     -> Mabuti naman ako! Masaya akong makasama ka sa pag-aaral ng Braille.
+ 72. kumusta ka
+     -> Mabuti naman ako! Masaya akong makasama ka sa pag-aaral ng Braille.
+ 73. linggo
+     -> Mayroong pitong araw sa isang linggo: Linggo, Lunes, Martes, Miyerkules, Huwebes, Biyernes, at Sabado.
+ 74. magandang gabi
+     -> Magandang gabi sa iyo!
+ 75. magandang hapon
+     -> Magandang hapon sa iyo!
+ 76. magandang umaga
+     -> Magandang umaga sa iyo! Handa ka na bang mag-aral?
+ 77. mga araw sa isang linggo
+     -> Ang pitong araw sa isang linggo ay Linggo, Lunes, Martes, Miyerkules, Huwebes, Biyernes, at Sabado.
+ 78. paano magbasa ng braille
+     -> Binabasa ang Braille gamit ang mga dulo ng daliri sa pamamagitan ng pagdama sa mga nakataas na tuldok.
+ 79. paano patayin ang brailce
+     -> Pindutin nang sabay ang Backspace at ang Power button.
+ 80. saan galing ang ulan
+     -> Galing ang ulan sa mga ulap na binubuo ng maliliit na patak ng tubig.
+ 81. saang planeta tayo nakatira
+     -> Tayo ay nakatira sa planetang Daigdig.
+ 82. salamat
+     -> Walang anuman! Masaya akong makatulong sa iyo.
+ 83. sino ang gumawa ng braille
+     -> Si Louis Braille ang lumikha ng sistemang Braille noong taong 1824.
+ 84. sino ka
+     -> Ako si Brailce, ang iyong matalinong katulong sa pag-aaral ng Braille.
+ 85. sino nag imbento ng braille
+     -> Si Louis Braille ang nag-imbento ng sistemang Braille noong 1824 sa Pransya.
+ 86. sino si louis braille
+     -> Si Louis Braille ay isang Pranses na tagapagturo na lumikha ng sistemang Braille para sa mga bulag.
+ 87. tulong
+     -> Narito ako upang tulungan ka sa pagbasa at pagsulat ng Braille.
+
+ENGLISH (98 tanong)
+------------------------------------------------------------
+  1. days of the week
+     -> The 7 days of the week are Sunday, Monday, Tuesday, Wednesday, Thursday, Friday, and Saturday.
+  2. hello
+     -> Hello! I am ready to help you learn and practice Braille.
+  3. hi
+     -> Hello! I am ready to help you learn and practice Braille.
+  4. how do i turn off brailce
+     -> Press the Backspace key and the Power button at the same time.
+  5. how many continents are there
+     -> There are 7 continents.
+  6. how many days are in a week
+     -> There are 7 days in a week: Sunday, Monday, Tuesday, Wednesday, Thursday, Friday, and Saturday.
+  7. how many days are there in a week
+     -> There are 7 days in a week: Sunday, Monday, Tuesday, Wednesday, Thursday, Friday, and Saturday.
+  8. how many days in a week
+     -> There are 7 days in a week: Sunday, Monday, Tuesday, Wednesday, Thursday, Friday, and Saturday.
+  9. how many days in a year
+     -> There are 365 days in a standard year, and 366 days in a leap year.
+ 10. how many days in one week
+     -> There are 7 days in a week: Sunday, Monday, Tuesday, Wednesday, Thursday, Friday, and Saturday.
+ 11. how many dots are in a braille cell
+     -> A standard Braille cell consists of six embossed dots arranged in two vertical columns of three dots each.
+ 12. how many hours in a day
+     -> There are 24 hours in a single day.
+ 13. how many legs does a chicken have
+     -> A chicken has 2 legs.
+ 14. how many legs does a dog have
+     -> A dog has 4 legs.
+ 15. how many legs does a spider have
+     -> A spider has 8 legs.
+ 16. how many legs does an insect have
+     -> An insect has 6 legs.
+ 17. how many letters are in the english alphabet
+     -> There are 26 letters in the English alphabet.
+ 18. how many minutes in an hour
+     -> There are 60 minutes in one hour.
+ 19. how many months are in a year
+     -> There are 12 months in a year: January to December.
+ 20. how many months in a year
+     -> There are 12 months in a year: January to December.
+ 21. how many planets are in the solar system
+     -> There are 8 planets in our solar system.
+ 22. how many planets are there
+     -> There are 8 planets in our solar system.
+ 23. how many seconds in a minute
+     -> There are 60 seconds in one minute.
+ 24. how many sides does a square have
+     -> A square has 4 equal sides.
+ 25. how many sides does a triangle have
+     -> A triangle has 3 sides.
+ 26. how to read braille
+     -> Braille is read with fingertips by feeling the patterns of raised dots from left to right.
+ 27. what are the colors of the rainbow
+     -> The colors of the rainbow are red, orange, yellow, green, blue, indigo, and violet.
+ 28. what are the days of the week
+     -> The days of the week are Sunday, Monday, Tuesday, Wednesday, Thursday, Friday, and Saturday.
+ 29. what are the five senses
+     -> The five senses are sight, hearing, smell, taste, and touch.
+ 30. what are the four seasons
+     -> The four seasons are spring, summer, autumn, and winter.
+ 31. what are the months of the year
+     -> The months are January, February, March, April, May, June, July, August, September, October, November, and December.
+ 32. what are the planets
+     -> The planets are Mercury, Venus, Earth, Mars, Jupiter, Saturn, Uranus, and Neptune.
+ 33. what are the primary colors
+     -> The primary colors are red, yellow, and blue.
+ 34. what are the seasons in the philippines
+     -> The Philippines has two seasons: the dry season and the rainy season.
+ 35. what can you do
+     -> I can help you practice Braille typing, solve arithmetic problems, and answer your learning questions.
+ 36. what do plants need to grow
+     -> Plants need sunlight, water, air, and soil to grow.
+ 37. what do we use to hear
+     -> We use our ears to hear.
+ 38. what do we use to see
+     -> We use our eyes to see.
+ 39. what do we use to smell
+     -> We use our nose to smell.
+ 40. what do we use to taste
+     -> We use our tongue to taste.
+ 41. what is 1 plus 1
+     -> 1 plus 1 equals 2.
+ 42. what is 10 minus 5
+     -> 10 minus 5 equals 5.
+ 43. what is 10 plus 10
+     -> 10 plus 10 equals 20.
+ 44. what is 2 plus 2
+     -> 2 plus 2 equals 4.
+ 45. what is 2 times 2
+     -> 2 times 2 equals 4.
+ 46. what is 3 plus 3
+     -> 3 plus 3 equals 6.
+ 47. what is 3 times 3
+     -> 3 times 3 equals 9.
+ 48. what is 4 plus 4
+     -> 4 plus 4 equals 8.
+ 49. what is 5 minus 2
+     -> 5 minus 2 equals 3.
+ 50. what is 5 plus 5
+     -> 5 plus 5 equals 10.
+ 51. what is 5 times 5
+     -> 5 times 5 equals 25.
+ 52. what is a braille cell
+     -> A Braille cell is a rectangular grid of six embossed dots that form letters, numbers, and punctuation.
+ 53. what is a circle
+     -> A circle is a round shape with no corners and no straight sides.
+ 54. what is a noun
+     -> A noun is a word for a person, animal, place, or thing.
+ 55. what is a rainbow
+     -> A rainbow is a curve of colors in the sky that appears when sunlight shines through raindrops.
+ 56. what is a verb
+     -> A verb is an action word, like run, eat, or read.
+ 57. what is brailce
+     -> Brailce is an interactive voice-assisted tutor for learning Braille.
+ 58. what is braille
+     -> Braille is a tactile reading and writing system using raised dots for visually impaired individuals.
+ 59. what is grade 1 braille
+     -> Grade 1 Braille is a letter-by-letter transcription system where every character matches a single print letter.
+ 60. what is photosynthesis
+     -> Photosynthesis is the process by which green plants use sunlight to synthesize food from water and carbon dioxide.
+ 61. what is rain
+     -> Rain is water that falls from the clouds.
+ 62. what is the biggest animal
+     -> The blue whale is the biggest animal on Earth.
+ 63. what is the capital of france
+     -> The capital of France is Paris.
+ 64. what is the capital of japan
+     -> The capital of Japan is Tokyo.
+ 65. what is the capital of the philippines
+     -> The capital of the Philippines is Manila.
+ 66. what is the capital of the united states
+     -> The capital of the United States is Washington, D.C.
+ 67. what is the closest star to earth
+     -> The Sun is the closest star to Earth.
+ 68. what is the fastest land animal
+     -> The cheetah is the fastest land animal.
+ 69. what is the hottest planet
+     -> Venus is the hottest planet in our solar system.
+ 70. what is the largest ocean
+     -> The Pacific Ocean is the largest ocean on Earth.
+ 71. what is the largest planet
+     -> Jupiter is the largest planet in our solar system.
+ 72. what is the moon
+     -> The Moon is Earth's only natural satellite that orbits our planet.
+ 73. what is the national animal of the philippines
+     -> The carabao is the national animal of the Philippines.
+ 74. what is the national bird of the philippines
+     -> The Philippine Eagle is the national bird of the Philippines.
+ 75. what is the national flower of the philippines
+     -> Sampaguita is the national flower of the Philippines.
+ 76. what is the national fruit of the philippines
+     -> The mango is the national fruit of the Philippines.
+ 77. what is the national language of the philippines
+     -> Filipino is the national language of the Philippines.
+ 78. what is the national tree of the philippines
+     -> The narra is the national tree of the Philippines.
+ 79. what is the red planet
+     -> Mars is called the red planet.
+ 80. what is the smallest planet
+     -> Mercury is the smallest planet in our solar system.
+ 81. what is the sun
+     -> The Sun is the star at the center of our solar system that provides light and heat.
+ 82. what is the tallest animal
+     -> The giraffe is the tallest animal.
+ 83. what is uncontracted braille
+     -> Uncontracted Braille, also known as Grade 1 Braille, represents words letter by letter without abbreviations.
+ 84. what is water
+     -> Water is a chemical compound composed of two hydrogen atoms and one oxygen atom.
+ 85. what is your name
+     -> My name is Brailce, your smart voice assistant for learning Braille.
+ 86. what planet do we live on
+     -> We live on the planet Earth.
+ 87. when was braille invented
+     -> The Braille system was invented in 1824.
+ 88. where does rain come from
+     -> Rain comes from clouds, which are made of tiny drops of water.
+ 89. who are you
+     -> I am Brailce, your dedicated voice assistant for learning Braille.
+ 90. who invented braille
+     -> Louis Braille invented the Braille system in 1824 in France.
+ 91. who invented the telephone
+     -> Alexander Graham Bell invented the telephone.
+ 92. who is louis braille
+     -> Louis Braille was a French educator who invented the Braille reading and writing code for the blind.
+ 93. who is the national hero of the philippines
+     -> Dr. Jose Rizal is the national hero of the Philippines.
+ 94. who made braille
+     -> Louis Braille invented the Braille system in 1824 in France.
+ 95. why do we need to drink water
+     -> Our body needs water to stay healthy.
+ 96. why do we need to sleep
+     -> Sleep helps our body and brain rest and grow.
+ 97. why is the sky blue
+     -> The sky appears blue because Earth's atmosphere scatters shorter blue wavelengths of sunlight more than other colors.
+ 98. why should we wash our hands
+     -> Washing our hands removes germs that can make us sick.

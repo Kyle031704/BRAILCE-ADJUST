@@ -46,6 +46,16 @@ COMMA_PAUSE_MS: int = 140
 SENTENCE_PAUSE_MS: int = 260
 
 
+def normalize_response_text(text: str) -> str:
+    """Spacing/punctuation clean-up applied before a response is spoken. Shared with
+    tools/prerender_filipino_sentences.py so pre-rendered sentence files match the
+    cache key (sha1 of this text) that FilipinoEngine looks up."""
+    t = re.sub(r"\s+", " ", (text or "").strip()).strip()
+    t = re.sub(r"\s+([,.\?!;:])", r"\1", t)
+    t = re.sub(r"([,.\?!;:])(?=[^\s\d])", r"\1 ", t)
+    return t
+
+
 class SpeechService(SpeechEngine):
     """
     Centralized speech coordinator for the Brailce device.
@@ -254,6 +264,26 @@ class SpeechService(SpeechEngine):
         with self._lock:
             self._character_engine.speak(normalized, interrupt=False)
 
+    def speak_word_now(self, word: str, max_wait: float = 6.0) -> bool:
+        """Speak a word and return only after it has played (Scanner readout).
+        Filipino: bypasses the async queue so nothing queued later can drop it, and
+        waits at most max_wait for an in-flight prefetch before using fallbacks.
+        English: same as speak_word_clean()."""
+        if not word:
+            return False
+        if self._language != "fil":
+            self.speak_word_clean(word, interrupt=False)
+            return True
+        prepared = prepare_spoken_word(word, lang=self._language)
+        if not prepared:
+            return False
+        bare = prepared.rstrip(".!?,;:")
+        if len(bare) == 1 and prepared.endswith("."):
+            self.speak_character(bare)
+            return True
+        self._record_utterance("word", prepared, {"word": prepared, "lang": "fil"})
+        return bool(self.filipino_engine.speak_filipino(prepared, max_wait=max_wait))
+
     def prefetch_word(self, word: str) -> None:
         """Prepare a word's audio in the background (Filipino: cache or online/offline
         synthesis) so a later speak_word_clean(word) starts without waiting."""
@@ -449,9 +479,7 @@ class SpeechService(SpeechEngine):
             return
 
         # Ensure single spaces between words and after punctuation
-        clean_text = re.sub(r"\s+", " ", clean_text).strip()
-        clean_text = re.sub(r"\s+([,.\?!;:])", r"\1", clean_text)
-        clean_text = re.sub(r"([,.\?!;:])(?=[^\s\d])", r"\1 ", clean_text)
+        clean_text = normalize_response_text(clean_text)
 
         if target_lang == "fil":
             if interrupt:

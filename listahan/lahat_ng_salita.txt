@@ -1,0 +1,196 @@
+BRAILCE - LAHAT NG SALITANG MAY HANDANG RECORDING
+============================================================
+
+Ang mga salitang ito ay agad na nabibigkas (naka-save na ang boses,
+hindi na kailangan ng internet).
+
+Paalala:
+- ENGLISH: kahit anong English na salita ay kayang bigkasin ng Piper voice
+  nang offline. Ang nasa listahan ay ang mga naka-save na (pinakamabilis).
+- FILIPINO: ang salitang wala sa listahan ay kinukuha sa internet
+  (Blessica voice) at sine-save para sa susunod. Kapag walang internet,
+  English voice ang babasa nito.
+- Lahat ng titik (A-Z, N-tilde) at numero (0-9) ay may sariling recording.
+
+FILIPINO (950 salita)
+------------------------------------------------------------
+0                 1                 1824              2                 3                 4
+5                 6                 640x480           7                 8                 9
+a                 abo               abril             agad              agila             agosto
+ahas              ai                akin              aklat             ako               akong
+alam              alin              alis              all               almusal           alpabetong
+ama               amin              an                anak              and               ang
+anim              animnapu          animnapung        animnaput         ano               anuman
+anumang           apat              apatnapu          apatnaput         apoy              aral
+araw              are               as                asin              aso               assistant
+asukal            asul              at                ate               atin              ating
+awit              ay                ayaw              ayusin            b                 ba
+baboy             backspace         bag               bagay             bago              bagyo
+bahaghari         bahagi            bahay             baka              bakit             balikat
+balyena           bandila           bang              bangka            bangus            bansa
+banyo             barko             basa              basahin           bata              bato
+bawang            bawas             bawasan           bawat             bayabas           bayani
+be                benus             berde             beses             bibig             bigay
+bilang            bili              bilog             binabasa          binawas           bintana
+binti             binubuo           binura            bisikleta         bituin            biyernes
+bola              bolyum            book              brailce           braille           braso
+breyl             breyls            bubuyog           buffer            buhangin          buhay
+buhok             bukas             buksan            bulag             bulaklak          bumabagsak
+bumili            bundok            bunso             buo               bus               busog
+butiki            button            buwan             by                camera            camerapreview
+can               cat               cell              count             daan              daga
+dagat             dagdag            dagdagan          dahil             dahon             daigdig
+dalawa            dalawampu         dalawamput        dalawang          daliri            damit
+damo              device            dibdib            dila              dilaw             din
+dinig             distansya         disyembre         dito              diyan             do
+dog               doktor            doon              dr                dulo              dumating
+dyip              dyirap            eagle             earth             edad              ekspresyon
+elepante          en                enero             english           enter             eroplano
+estudyante        ey-ay             feed              fil               filipino          for
+france            from              gabi              gagamba           galing            galit
+gamit             gatas             get               gilid             ginagamit         gising
+gitna             go                grade             greyd             guhit             gulay
+gumising          gumuhit           gunting           guro              gusto             gutom
+haba              hakbang           hal               halaman           hanay             handa
+hanggang          hangin            hapon             hapunan           hatiin            have
+hawak             hayop             help              hidroheno         hinati            hindi
+hintay            his               hugas             hugis             huli              hulyo
+hunyo             hupiter           huwag             huwebes           hydrogen          i-scan
+i-tayp            iba               ibahagi           ibig              ibigay            ibinahagi
+ibon              idagdag           if                ikaw              ilagay            ilalim
+ilan              ilapit            ilayo             ilog              ilong             in
+ina               indigo            ingles            init              inom              insekto
+inyo              is                isa               isahan            isang             isara
+isda              ispeys            it                itapat            itim              itinigil
+itlog             ito               its               itype             iyak              iyan
+iyo               iyon              iyong             j                 jose              jpg
+jupiter           ka                kaarawan          kabayo            kabisera          kagamitan
+kahapon           kahel             kahon             kaibigan          kailan            kailangan
+kain              kalabaw           kalye             kama              kamatis           kamay
+kambing           kamera            kami              kanila            kanin             kanina
+kanta             kanya             kapag             kapatid           kapitbahay        karagatan
+karagatang        karakter          karaniwang        karne             kasi              katawan
+katulong          katumbas          kaunti            kay               kaya              kayo
+kaysa             kayumanggi        kendi             key               keys              kidlat
+kilala            kilos             kita              ko                kontinente        kotse
+krayola           kuha              kuko              kulang            kulay             kulog
+kumain            kumakain          kumanta           kumot             kumusta           kunan
+kuneho            kung              kunin             kusina            kuwaderno         kuwarto
+kuwento           kuya              laba              labimpito         labindalawa       labindalawang
+labing-anim       labing-apat       labing-isa        labing-walo       labinlima         labinsiyam
+labintatlo        lagi              laging            lahat             lakad             lakas
+laman             lamang            lamok             lang              langaw            langgam
+langit            language          lapis             larawan           laro              laruan
+layo              lcd               learning          led               leeg              leon
+letra             libo              libro             ligo              likas             likidong
+likod             lila              lima              limampu           limamput          limang
+linggo            linis             live              liwanag           lola              lolo
+loob              louis             lugar             luma              lumakas           lumaki
+lumalabas         lumikha           lunes             lupa              luto              maaaring
+maaga             maalat            maalis            maasim            mababa            mabagal
+mabaho            mabait            mabango           mabasang          mabigat           mabilis
+mabuhay           mabuti            madalas           mag-aaral         mag-aral          mag-install
+mag-scan          mag-tayp          mag-type          magaan            magamit           maganda
+magandang         magbasa           magbilang         magdagdag         maghintay         maghugas
+magkakapantay     magkano           maglagay          maglakad          maglaro           maglinis
+magluto           magsasaka         magsimula         magsulat          magtanong         magturo
+mahaba            mahal             mahalaga          mahina            maikli            mainit
+makaamoy          makakabahagi      makakita          makalkula         makapagpahinga    makarinig
+makasama          makatulong        makita            makuha            malabo            malakas
+malaki            malaking          malambot          malamig           malapit           malasahan
+malayang          mali              maligo            maliit            maliliit          malinaw
+maling            malinis           malungkot         malusog           mamaya            manatiling
+manga             mangga            mangingisda       mangyaring        manika            manok
+mansanas          mapait            marami            marinig           marso             marte
+martes            marumi            mas               masagot           masama            masarap
+masaya            masipag           masyadong         mata              mataas            matalino
+matalinong        matamis           matanda           matematika        math              matigas
+matulog           may               maynila           mayo              mayroon           mayroong
+me                merkuryo          meron             meryenda          mesa              mga
+mikrobyo          minsan            minuto            miyerkules        mo                mode
+model             modelo            modernong         modong            mukha             mula
+muna              mundo             musika            my                na                nabura
+nag-aaral         nag-iisip         nag-imbento       nagbabago         nagbabasa         nagbabaybay
+nagbibigay        nagdudulot        naghuhugas        naging            naglalaro         nagsasaad
+nagsusulat        naimbento         naitabi           naka-install      nakakonekta       nakataas
+nakatapat         nakatira          nakita            nakitang          nakuha            naman
+namin             nanay             nang              narito            narra             nars
+natin             nating            natira            natirang          natitira          natitirang
+natutulog         neptuno           neural            ng                nga               ngayon
+ngipin            ngiti             ngumiti           ni                nila              ninyo
+niya              niyog             nobyembre         noong             not               numero
+o                 of                offline           ok                oksiheno          oktubre
+on                one               oo                operasyon         operator          opo
+or                oras              oso               ospital           out               oxygen
+pa                paa               paalam            paano             paaralan          pabalik
+pag-aaral         pag-type          pagbasa           pagbawas          pagbibilang       pagdagdag
+pagdama           page              pagkain           pagkatapos        paglalagay        pagod
+pagong            pagpapaikli       pagpindot         pagsamahin        pagsasalin        pagsulat
+pahina            pakinig           pakwan            palagi            palaka            palaruan
+palengke          paliwanag         pamamagitan       pambansang        pambura           pamilya
+panahon           pandama           pandikit          pandinig          pandiwa           pang-amoy
+pangalan          pangalawang       pangit            pangkat           pangngalan        pangunahing
+pangungusap       pangwakas         paningin          panlasa           pansalat          pantay
+panuri            papaya            papel             para              paramihin         parisukat
+parke             paruparo          pasipiko          patak             pato              paumanhin
+pebrero           pero              philippine        pi                pilipinas         pinagsama
+pinakamalaking    pinakamalapit     pinakamaliit      pinakamataas      pinapatay         pinarami
+pindot            pindutan          pindutin          pinsan            pinto             pisara
+pito              pitong            pitumpu           pitumput          planeta           planetang
+po                pokus             porsyento         posisyon          power             pranses
+pransya           problema          problemang        prutas            pula              pulis
+pumindot          pumunta           puno              punta             puntirya          pusa
+puso              puti              puwede            r1                raspberry         read
+regalo            rin               rizal             rosas             sa                saan
+sabado            sabaw             sabay             sabi              sabihin           saging
+sagot             sakit             sakto             salamat           salita            salitang
+sampaguita        sampu             sampuan           sana              sanggol           sanlinggo
+sapatos           sara              sarado            saranggola        sasakyan          satelayt
+saturno           sayaw             scanner           segundo           sero              setyembre
+si                sibuyas           sige              sikat             sila              silid
+silid-aralan      silya             simbahan          simbolo           simula            sino
+sinusuri          sistema           sistemang         siya              siyam             siyamnapu
+siyamnaput        so                solar             solusyon          space             subukan
+sulat             sulok             sumagot           sumayaw           sumbrero          suportadong
+system            tab               tag-init          tag-ulan          tagapagturo       tainga
+takbo             takot             talaga            tama              tamad             tanda
+tanghali          tanghalian        tanong            tao               taon              taong
+tapat             tapos             tara              tatay             tatlo             tatlong
+tatlumpu          tatlumput         tatsulok          tawa              tayo              that
+the               their             there             they              this              tigre
+tinapay           tindahan          tindera           tindero           tingin            tisa
+tita              titik             titik-sa-titik    tito              tiyan             to
+totoo             tren              tsinelas          tubig             tuhod             tula
+tulad             tuldok            tulog             tulong            tulungan          tumakbo
+tumatakbo         tumatama          tumawa            tumayo            tumingin          tumulong
+tumutukoy         tunay             tunog             turo              tuwid             type
+ubas              uhaw              ulam              ulan              ulap              ulit
+ulo               umaga             umalis            umawit            umiikot           uminom
+umiyak            umupo             una               unan              unang             uncontracted
+unggoy            uod               up                upang             upo               upuan
+urano             usb               voice             vol               wala              walang
+walo              walong            walumpu           walumput          was               wasto
+we                what              when              where             which             who
+why               wifi              wika              wikang            with              yakap
+you               zero
+
+ENGLISH (106 salita)
+------------------------------------------------------------
+1234567890        aa                abc               apostrophe        apple             asdfghjklqwertyuiop
+b                 bb                bc                berd              blue              blx
+bought            box               bpe               brailce           braille           brought
+by                c                 ca                cc                cca               cccc
+charles           colon             da                david             days              dooh
+door              egg               eh                el                er                gate
+gay               gol               gold              hahahahah         hat               hello
+his               hlm               hoad              hom               home              how
+idje              ilang             in                into              is                jai
+jump              just              k                 key               kidding           laic
+lase              lke               lo                love              lupa              m
+many              mob               monday            money             nest              opo
+or                oy                pleas             please            pnmx              pp
+probbe            prone             quiz              quote             qwert             rain
+rkin              road              ronald            semicolon         ship              siz
+st                tree              tubig             unknown           vase              was
+water             week              what              when              where             wifb
+wind              world             xcdvedoplwpfrdklkcxcdvedoplwpfrdklkckde3qqpwpooooooooooo

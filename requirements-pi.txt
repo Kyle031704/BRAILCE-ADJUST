@@ -23,3 +23,9 @@ requests>=2.28.0
 
 # Direct USB keyboard input (/dev/input, headless systemd operation)
 evdev>=1.6.0
+
+# Natural Filipino sentence voice (Edge-TTS Blessica, used when online).
+# Without miniaudio the MP3 cannot be decoded and Filipino sentences fall back to
+# word-by-word playback (unnatural flow).
+edge-tts>=6.1.0
+miniaudio>=1.59

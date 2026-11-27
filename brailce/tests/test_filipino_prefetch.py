@@ -50,3 +50,29 @@ def test_scanner_prefetches_each_scanned_word():
     ]
     mode._prefetch_words(cells, speech)
     assert [c.args[0] for c in speech.prefetch_word.call_args_list] == ["ANG", "BA"]
+
+
+def test_slow_prefetch_falls_back_instead_of_silence(tmp_path):
+    eng = FilipinoEngine()
+    release = threading.Event()
+    calls = []
+
+    def slow_synth(text, out):
+        calls.append(text)
+        release.wait(5)            # internet slower than the scanner's budget
+        return False
+
+    with patch("brailce.speech.filipino_engine._find_filipino_audio_dir", return_value=str(tmp_path)), \
+         patch("brailce.speech.filipino_engine.get_filipino_word_path", return_value=None), \
+         patch.object(eng, "synthesize_to_wav", side_effect=slow_synth), \
+         patch.object(eng, "_play_offline_concatenated_sentence", return_value=False):
+        fallback = MagicMock()
+        eng.fallback_speech = fallback
+        fallback._text_engine = fallback
+        eng.prefetch("tunay.")
+        t0 = time.monotonic()
+        assert eng.speak_filipino("tunay.", max_wait=0.3) is True
+        assert time.monotonic() - t0 < 2.0          # did not wait for the slow synthesis
+        fallback.speak.assert_called_once()         # something was said
+        release.set()
+    assert calls == ["tunay."]                      # no second synthesis started

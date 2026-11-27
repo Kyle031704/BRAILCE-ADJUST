@@ -1,0 +1,63 @@
+BRAILCE - MGA BAGONG FILIPINO NA SALITA
+============================================================
+
+333 bagong salitang may recording na (Blessica voice, parehong lakas
+at proseso ng dating mga recording). Ginawa gamit ang
+tools/add_filipino_words.py at tools/filipino_vocabulary_source.txt.
+
+abo               abril             agad              agosto            ahas              akin
+alam              alin              alis              almusal           ama               amin
+anak              animnapung        asin              asukal            atin              awit
+ayaw              bagay             bagyo             bahaghari         balikat           balyena
+bandila           bangka            bangus            bansa             banyo             barko
+bato              bawang            bayabas           benus             bili              bilog
+bintana           binti             bisikleta         bola              braso             bubuyog
+buhangin          buksan            bumabagsak        bumili            bundok            bus
+busog             butiki            button            daga              dagat             damo
+dibdib            dila              din               dinig             dito              diyan
+doon              dumating          dyip              dyirap            elepante          eroplano
+estudyante        gagamba           galing            gilid             ginagamit         guhit
+gumising          gumuhit           gunting           gusto             halaman           hapunan
+hayop             hintay            hugis             huli              hulyo             hunyo
+huwag             iba               ibigay            ilan              ilog              ina
+indigo            ingles            insekto           inyo              isara             itlog
+iyak              kaarawan          kabayo            kahel             kailangan         kalabaw
+kalye             kama              kamatis           kambing           kanila            kanina
+kanta             kanya             kapatid           kapitbahay        karagatan         karagatang
+karne             kasi              katawan           kay               kayo              kendi
+kidlat            kilos             kontinente        kotse             krayola           kuko
+kulay             kulog             kumain            kumakain          kumanta           kumot
+kuneho            kunin             kusina            kuwaderno         kuwarto           kuwento
+lagi              lamok             lang              langaw            langgam           langit
+laruan            leeg              leon              letra             ligo              likod
+lila              lugar             lumakas           lumaki            lumalabas         maaga
+maalis            mabaho            mabango           mabigat           mabuhay           madalas
+mag-aaral         magaan            magbasa           maghugas          magkakapantay     magkano
+maglakad          maglaro           maglinis          magluto           magsasaka         magsulat
+magturo           makaamoy          makakita          makapagpahinga    makarinig         malambot
+malasahan         maligo            maliliit          malusog           mamaya            manatiling
+mangingisda       manika            marami            marso             marte             masama
+masarap           masipag           matalino          matanda           matigas           matulog
+mayo              merkuryo          meron             meryenda          mikrobyo          minsan
+minuto            mukha             musika            nag-aaral         nagbabasa         nagdudulot
+naghuhugas        naglalaro         nagsasaad         nagsusulat        narra             nars
+nating            natutulog         neptuno           nga               ngiti             ngumiti
+ni                ninyo             niyog             nobyembre         oktubre           oso
+ospital           pagong            pakwan            palagi            palaka            palaruan
+palengke          pambura           panahon           pandama           pandikit          pandinig
+pandiwa           pang-amoy         pangit            pangngalan        pangunahing       paningin
+panlasa           pansalat          papaya            parisukat         parke             paruparo
+pasipiko          patak             pato              pebrero           pinakamaliit      pinakamataas
+pinsan            pinto             power             pulis             pumunta           punta
+puwede            regalo            rosas             sabaw             sabay             sabi
+sakit             salitang          sana              sanggol           saranggola        sasakyan
+saturno           sayaw             segundo           setyembre         sibuyas           sige
+sikat             silid-aralan      simbahan          sulok             sumagot           sumayaw
+sumbrero          tag-init          tag-ulan          talaga            tamad             tanghalian
+tao               tara              tatsulok          tawa              tigre             tindahan
+tindera           tindero           tisa              tita              tito              tiyan
+totoo             tren              tsinelas          tuhod             tula              tumakbo
+tumatama          tumawa            tumayo            tumingin          tumulong          tumutukoy
+tunay             turo              tuwid             ubas              umalis            umawit
+uminom            umiyak            umupo             unan              unggoy            uod
+upuan             urano             yakap

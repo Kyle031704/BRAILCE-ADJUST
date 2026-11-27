@@ -63,6 +63,25 @@ def is_internet_available(cache_ttl_s: float = 5.0) -> bool:
     return _LAST_INTERNET_CHECK_RESULT
 
 
+def _fft_resample(samples: Any, target_len: int) -> Any:
+    """FFT resampling (same method as scipy.signal.resample). Uses scipy when it is
+    installed (PC), numpy otherwise (the Pi venv has no scipy)."""
+    try:
+        from scipy import signal
+        return signal.resample(samples, target_len)
+    except ImportError:
+        pass
+    x = np.asarray(samples, dtype=np.float64)
+    n = x.size
+    if n == 0 or target_len <= 0:
+        return np.zeros(max(0, target_len))
+    spec = np.fft.rfft(x)
+    out = np.zeros(target_len // 2 + 1, dtype=complex)
+    k = min(spec.size, out.size)
+    out[:k] = spec[:k]
+    return np.fft.irfft(out, n=target_len) * (target_len / n)
+
+
 def pitch_shift_pcm(samples: Any, semitones: float, sr: int = TARGET_SAMPLE_RATE) -> Any:
     """
     Fast, dependency-light phase-vocoder pitch shifter in pure numpy.
@@ -794,7 +813,7 @@ class FilipinoEngine:
 
         threading.Thread(target=_run, name="filipino-prefetch", daemon=True).start()
 
-    def speak_filipino(self, text: str, allow_ai_cache: bool = False) -> bool:
+    def speak_filipino(self, text: str, allow_ai_cache: bool = False, max_wait: float = 20.0) -> bool:
         """
         Speak Filipino text: cached word -> named phrase -> AI cache -> sentence hash
         cache -> synthesis (_resolve_audio), then offline fallbacks. If a prefetch of the
@@ -805,20 +824,31 @@ class FilipinoEngine:
         key = text.strip()
         with self._prefetch_lock:
             pending = self._prefetch_inflight.get(key)
+        ready = True
         if pending is not None:
-            pending.wait(timeout=20.0)
-        path = self._resolve_audio(text, allow_ai_cache=allow_ai_cache)
+            ready = pending.wait(timeout=max(0.0, float(max_wait)))
+        # Still synthesizing after max_wait (slow internet): don't start a second
+        # synthesis; use what is cached, else the offline fallbacks below.
+        path = self._resolve_audio(text, allow_ai_cache=allow_ai_cache, synthesize=ready)
         if path:
             return AudioDeviceCoordinator.play_wav_file(path, owner="filipino", timeout=45.0)
         trimmed = key
-        cache_dir = _find_filipino_audio_dir()
-        h_main = hashlib.sha1(trimmed.encode("utf-8")).hexdigest()
-        target_wav = os.path.join(cache_dir, f"sentence_{h_main}.wav")
 
-        # 6. Fallback (strictly if offline and sentence is not in cache): Seamless concatenated word WAVs
-        if self._play_offline_concatenated_sentence(trimmed, target_wav):
-            if os.path.isfile(target_wav) and os.path.getsize(target_wav) > 1000:
-                return AudioDeviceCoordinator.play_wav_file(target_wav, owner="filipino", timeout=45.0)
+        # 6. Fallback (offline / synthesis failed): concatenated word WAVs. Written to a
+        # temp file, NOT to the sentence cache: a cached word-by-word version would be
+        # replayed forever even after natural synthesis works again.
+        fd, concat_wav = tempfile.mkstemp(prefix="brailce_concat_", suffix=".wav")
+        os.close(fd)
+        try:
+            if self._play_offline_concatenated_sentence(trimmed, concat_wav):
+                if os.path.isfile(concat_wav) and os.path.getsize(concat_wav) > 1000:
+                    logger.info("FilipinoEngine: word-by-word fallback for %r (no natural synthesis)", trimmed)
+                    return AudioDeviceCoordinator.play_wav_file(concat_wav, owner="filipino", timeout=45.0)
+        finally:
+            try:
+                os.remove(concat_wav)
+            except OSError:
+                pass
 
         # 7. Fallback to English/Piper engine if offline Filipino synthesis cannot produce audio (loanwords/English flashcards)
         if self.fallback_speech is not None:
@@ -925,8 +955,7 @@ class FilipinoEngine:
             target_sr = TARGET_SAMPLE_RATE  # 22050
             if sr != target_sr:
                 target_len = int(round(len(samples) * target_sr / sr))
-                from scipy import signal
-                samples = signal.resample(samples, target_len)
+                samples = _fft_resample(samples, target_len)
                 sr = target_sr
 
             pcm_int16 = np.clip(np.round(samples), -32767, 32767).astype(np.int16)

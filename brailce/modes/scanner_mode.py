@@ -668,7 +668,11 @@ class ScannerMode(BaseMode):
             except Exception as exc:
                 logger.debug("Failed playing filipino word wav for '%s': %s", word, exc)
 
-        if hasattr(speech, "speak_word_clean"):
+        if lang == "fil" and hasattr(speech, "speak_word_now"):
+            # Blocking: the readout (and its return to the live preview) waits for
+            # the word, so a slow first-time synthesis can no longer be dropped.
+            speech.speak_word_now(word, max_wait=6.0)
+        elif hasattr(speech, "speak_word_clean"):
             speech.speak_word_clean(word, interrupt=False)
         elif hasattr(speech, "speak_word"):
             speech.speak_word(word)
