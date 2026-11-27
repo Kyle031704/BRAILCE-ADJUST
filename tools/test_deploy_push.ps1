@@ -21,7 +21,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $Repo   = "https://github.com/Kyle031704/BRAILCE-ADJUST.git"
-$Branch = "lcd-redesign-color-scan"
+$Branch = "master"
 $Plink  = "C:\Program Files\PuTTY\plink.exe"
 Set-Location (Split-Path -Parent $PSScriptRoot)
 
