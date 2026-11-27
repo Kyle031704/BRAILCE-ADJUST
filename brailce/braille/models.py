@@ -60,6 +60,16 @@ class BrailleMapping:
             {1, 2} → "Dots 1-2"
             {1}    → "Dot 1"
         """
+        cells = [ch for ch in (self.braille_unicode or "") if 0x2800 <= ord(ch) <= 0x28FF]
+        if len(cells) > 1:
+            # Multi-cell symbol (e.g. UEB "+" = dot 5, then dots 2-3-5): one part per cell
+            parts = []
+            for ch in cells:
+                bits = ord(ch) - 0x2800
+                dots = [i + 1 for i in range(6) if bits & (1 << i)]
+                parts.append("No dots" if not dots else
+                             (f"Dot {dots[0]}" if len(dots) == 1 else "Dots " + "-".join(map(str, dots))))
+            return " ".join(parts)
         if not self.braille_dots:
             return "No dots"
         sorted_dots = sorted(self.braille_dots)

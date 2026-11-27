@@ -35,12 +35,21 @@ def spoken_texts() -> List[str]:
     from brailce.modes.ai_assistant import FILIPINO_AI_OFFLINE_RESPONSES
     from brailce.speech.service import normalize_response_text
 
+    from brailce.modes.ai_assistant import format_spoken_question
+
+    fil_questions = list(FILIPINO_AI_OFFLINE_RESPONSES.keys())
+    fil_questions += [q for q in FACTUAL_QA_RESPONSES if q.startswith(FIL_QUESTION_START)]
     answers = list(FILIPINO_AI_OFFLINE_RESPONSES.values())
-    answers += [a for q, a in FACTUAL_QA_RESPONSES.items() if q.startswith(FIL_QUESTION_START)]
+    answers += [FACTUAL_QA_RESPONSES[q] for q in FACTUAL_QA_RESPONSES if q.startswith(FIL_QUESTION_START)]
+
+    spoken = []
+    # The typed question, echoed by AIAssistantMode._handle_enter -> speak_response_text
+    spoken += [format_spoken_question(q, "fil") for q in fil_questions]
+    # The answer, via AIAssistantMode._finish_processing -> speak_response_text
+    spoken += [clean_ai_response(a) or a for a in answers]
     out, seen = [], set()
-    for a in answers:
-        # Same path as AIAssistantMode._finish_processing -> speak_response_text
-        t = normalize_response_text(clean_ai_response(a) or a)
+    for s in spoken:
+        t = normalize_response_text(s)
         if t and t not in seen:
             seen.add(t)
             out.append(t)
@@ -67,7 +76,7 @@ def main() -> int:
             made.append(path)
         else:
             failed.append(t)
-    print(f"{len(texts)} Filipino answers: rendered {len(made)}, failed {len(failed)}.")
+    print(f"{len(texts)} Filipino questions + answers: rendered {len(made)}, failed {len(failed)}.")
     for t in failed:
         print("  FAILED:", t)
     if made:

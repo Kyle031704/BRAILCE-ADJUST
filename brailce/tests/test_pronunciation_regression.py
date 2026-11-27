@@ -274,6 +274,8 @@ class TestFilipinoPronunciationRegression:
 
             f0, _ = estimate_f0_autocorr(data, sr=sr)
             assert f0 is not None, f"char_{char}.wav has no detectable voiced pitch"
-            assert f0 >= 160.0, f"char_{char}.wav F0={f0:.1f} Hz is too low (expected female Blessica > 160 Hz)"
+            # S, F, M, O use the female en-PH-Rosa recording (same as English); its
+            # "em" sits a little lower, so the female-voice floor is 150 Hz.
+            assert f0 >= 150.0, f"char_{char}.wav F0={f0:.1f} Hz is too low (expected a female voice > 150 Hz)"
 
 

@@ -948,7 +948,10 @@ class FilipinoEngine:
             if not audio_bytes:
                 return False
 
-            dec = miniaudio.decode(audio_bytes)
+            # Ask for mono at the bank rate. miniaudio.decode() defaults to 2 channels at
+            # 44100 Hz; reading that interleaved stereo as mono doubled the length, so
+            # Filipino sentences played at half speed, an octave too low.
+            dec = miniaudio.decode(audio_bytes, nchannels=1, sample_rate=TARGET_SAMPLE_RATE)
             samples = np.array(dec.samples, dtype=np.float64)
             sr = dec.sample_rate
 

@@ -105,6 +105,30 @@ FILIPINO_AI_OFFLINE_RESPONSES = {
 }
 
 
+_QUESTION_WORDS = {
+    "fil": ("ano", "sino", "saan", "saang", "kailan", "bakit", "paano", "ilan", "ilang", "alin", "magkano", "kumusta"),
+    "en": ("what", "who", "where", "when", "why", "how", "which", "is", "are", "do", "does", "can", "will"),
+}
+
+
+def format_spoken_question(query: str, language: str = "en") -> str:
+    """Turn a typed query ("ANO ANG ULAN") into a natural spoken sentence
+    ("Ano ang ulan?"): lower case, capitalised first letter, and a question mark
+    when it starts with a question word and has no end punctuation. Shared with
+    tools/prerender_filipino_sentences.py so the pre-rendered audio matches."""
+    q = " ".join((query or "").split()).lower()
+    if not q:
+        return q
+    lang = "fil" if (language or "en").lower() == "fil" else "en"
+    if q[-1] not in ".?!":
+        first = q.split(" ", 1)[0]
+        if first in _QUESTION_WORDS[lang] or (lang == "en" and first in _QUESTION_WORDS["en"]):
+            q += "?"
+    # Keep Braille / Brailce / Louis capitalised like the answers do
+    q = re.sub(r"\b(braille|brailce|louis|pilipinas|philippines)\b", lambda m: m.group(1).capitalize(), q)
+    return q[0].upper() + q[1:]
+
+
 # Grade 1 Braille / UEB: Letters A-J correspond directly to numbers 1-0 under the # indicator
 BRAILLE_LETTER_TO_NUMBER = {
     "A": ("1", "one"),
@@ -268,14 +292,17 @@ class AIAssistantMode(BaseMode):
         if self.app.display:
             self.app.display.show_ai_processing(query)
 
-        # Speak the submitted question/phrase immediately so learner hears what was sent
+        # Speak the submitted question/phrase immediately so learner hears what was sent.
+        # Spoken as a normal sentence ("Ano ang ulan?"): the keypad types ALL CAPS
+        # without punctuation, which TTS reads with flat, spelled-out-looking prosody.
+        spoken_q = format_spoken_question(query, self.state.language)
         if self.app.speech:
             if self.state.language == "fil":
-                self.app.speech.speak_response_text(query, interrupt=True, allow_ai_cache=False, lang="fil")
+                self.app.speech.speak_response_text(spoken_q, interrupt=True, allow_ai_cache=False, lang="fil")
             elif hasattr(self.app.speech, "speak_sentence"):
-                self.app.speech.speak_sentence(query, interrupt=False)
+                self.app.speech.speak_sentence(spoken_q, interrupt=False)
             else:
-                self.app.speech.speak_text(query, interrupt=True)
+                self.app.speech.speak_text(spoken_q, interrupt=True)
 
         # Start background thread for Ollama inference
         self._cancel_event.clear()

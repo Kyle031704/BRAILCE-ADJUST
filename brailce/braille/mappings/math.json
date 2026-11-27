@@ -1,7 +1,66 @@
 [
-    { "character": "+", "braille_dots": [3, 4, 6], "braille_unicode": "⠬", "category": "MATH_OPERATOR", "speech": "plus" },
-    { "character": "-", "braille_dots": [3, 6], "braille_unicode": "⠤", "category": "MATH_OPERATOR", "speech": "minus" },
-    { "character": "*", "braille_dots": [1, 6], "braille_unicode": "⠡", "category": "MATH_OPERATOR", "speech": "times" },
-    { "character": "/", "braille_dots": [3, 4], "braille_unicode": "⠌", "category": "MATH_OPERATOR", "speech": "divided by" },
-    { "character": "=", "braille_dots": [2, 3, 5, 6], "braille_unicode": "⠶", "category": "MATH_OPERATOR", "speech": "equals" }
+    {
+        "character": "+",
+        "braille_dots": [
+            2,
+            3,
+            5
+        ],
+        "braille_unicode": "⠐⠖",
+        "category": "MATH_OPERATOR",
+        "speech": "plus",
+        "braille_code": "UEB",
+        "note": "UEB two-cell symbol: dot 5 prefix + operator cell; braille_dots is the operator cell"
+    },
+    {
+        "character": "-",
+        "braille_dots": [
+            3,
+            6
+        ],
+        "braille_unicode": "⠐⠤",
+        "category": "MATH_OPERATOR",
+        "speech": "minus",
+        "braille_code": "UEB",
+        "note": "UEB two-cell symbol: dot 5 prefix + operator cell; braille_dots is the operator cell"
+    },
+    {
+        "character": "*",
+        "braille_dots": [
+            2,
+            3,
+            6
+        ],
+        "braille_unicode": "⠐⠦",
+        "category": "MATH_OPERATOR",
+        "speech": "times",
+        "braille_code": "UEB",
+        "note": "UEB two-cell symbol: dot 5 prefix + operator cell; braille_dots is the operator cell"
+    },
+    {
+        "character": "/",
+        "braille_dots": [
+            3,
+            4
+        ],
+        "braille_unicode": "⠐⠌",
+        "category": "MATH_OPERATOR",
+        "speech": "divided by",
+        "braille_code": "UEB",
+        "note": "UEB two-cell symbol: dot 5 prefix + operator cell; braille_dots is the operator cell"
+    },
+    {
+        "character": "=",
+        "braille_dots": [
+            2,
+            3,
+            5,
+            6
+        ],
+        "braille_unicode": "⠐⠶",
+        "category": "MATH_OPERATOR",
+        "speech": "equals",
+        "braille_code": "UEB",
+        "note": "UEB two-cell symbol: dot 5 prefix + operator cell; braille_dots is the operator cell"
+    }
 ]

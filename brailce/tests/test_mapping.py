@@ -61,7 +61,10 @@ class TestBrailleMappingService:
         
         math_plus = service.get_mapping("+")
         assert math_plus is not None
-        assert math_plus.braille_dots == {3, 4, 6}
+        # UEB two-cell plus: dot 5 prefix, then dots 2-3-5
+        assert math_plus.braille_unicode == "⠐⠖"
+        assert math_plus.braille_dots == {2, 3, 5}
+        assert math_plus.dots_string() == "Dot 5 Dots 2-3-5"
         assert math_plus.speech == "plus"
         assert math_plus.category == CharacterCategory.MATH_OPERATOR
 

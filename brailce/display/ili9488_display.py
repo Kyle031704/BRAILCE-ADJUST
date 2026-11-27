@@ -122,6 +122,10 @@ LCD_LABELS: Dict[str, Dict[str, str]] = {
     "SCANNER_TIP": {"en": "Hold the page flat, about one hand-span below the camera.",
                     "fil": "Ihiga ang pahina, mga isang dangkal sa ilalim ng kamera."},
     "ERROR": {"en": "Error", "fil": "Error"},
+    # Scanner distance pill (followed the app language only in Filipino before)
+    "DIST_OK": {"en": "DISTANCE OK | READY", "fil": "SAKTO ANG DISTANSYA | HANDA"},
+    "DIST_TOO_CLOSE": {"en": "TOO CLOSE | MOVE BACK", "fil": "MASYADONG MALAPIT | ILAYO"},
+    "DIST_TOO_FAR": {"en": "TOO FAR | MOVE CLOSER", "fil": "MASYADONG MALAYO | ILAPIT"},
 }
 
 
@@ -1383,11 +1387,11 @@ class ILI9488Display(DisplayDevice):
             pill_text = None
             pill_color = Palette.STEP
             if distance_state == "ok":
-                pill_text, pill_color = "SAKTO ANG DISTANSYA | READY", Palette.OK
+                pill_text, pill_color = self._L("DIST_OK"), Palette.OK
             elif distance_state == "too_close":
-                pill_text, pill_color = "MASYADONG MALAPIT | ILAYO", Palette.WARN
+                pill_text, pill_color = self._L("DIST_TOO_CLOSE"), Palette.WARN
             elif distance_state == "too_far":
-                pill_text, pill_color = "MASYADONG MALAYO | ILAPIT", Palette.WARN
+                pill_text, pill_color = self._L("DIST_TOO_FAR"), Palette.WARN
             elif status and "detected" in str(status).lower():
                 pill_text = str(status)[:46]
                 low = pill_text.lower()

@@ -384,7 +384,8 @@ class TestVocalOutputAndModeIsolation:
         # 3. Press Enter -> pronounces sentence 'HI' via speak_sentence
         with patch("threading.Thread.start"):
             ai_mode.handle_event(InputEvent(EventType.ENTER_PRESSED))
-            mock_speech.speak_sentence.assert_called_with("HI", interrupt=False)
+            # typed "HI" is echoed as a normal sentence
+            mock_speech.speak_sentence.assert_called_with("Hi", interrupt=False)
 
     def test_mode_isolation_between_math_and_ai(self) -> None:
         """

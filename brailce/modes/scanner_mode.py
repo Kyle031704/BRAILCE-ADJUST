@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import time
 from collections import deque
@@ -530,6 +531,7 @@ class ScannerMode(BaseMode):
 
             self._scanned_frame = best_frame
             result = best_result or {"readable": False, "reason": "no_braille"}
+            self._save_raw_frame(best_frame, result)
 
             # Log Scanner result to terminal on every scan for PuTTY visibility
             readable = bool(result.get("readable", False))
@@ -708,6 +710,32 @@ class ScannerMode(BaseMode):
         for w in dict.fromkeys(words):
             if len(w) > 1:
                 speech.prefetch_word(w)
+
+    RAW_FRAMES_KEEP = 40
+
+    def _save_raw_frame(self, frame: Any, result: Dict[str, Any]) -> None:
+        """Keep the untouched camera frame of each scan (debug_scan/raw_<time>_<text>.jpg,
+        newest RAW_FRAMES_KEEP only) so misreads can be reproduced offline; the
+        annotated scan_*.jpg images have overlays drawn on them."""
+        if frame is None or os.environ.get("BRAILCE_SAVE_RAW_SCANS", "1") == "0":
+            return
+        try:
+            import cv2
+            import glob
+            out_dir = os.path.abspath("debug_scan")
+            os.makedirs(out_dir, exist_ok=True)
+            text = str(result.get("text", "")) if result.get("readable") else str(result.get("reason", "none"))
+            tag = re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_")[:24] or "none"
+            path = os.path.join(out_dir, f"raw_{time.strftime('%Y%m%d_%H%M%S')}_{tag}.jpg")
+            cv2.imwrite(path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+            old = sorted(glob.glob(os.path.join(out_dir, "raw_*.jpg")))
+            for p in old[:-self.RAW_FRAMES_KEEP]:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+        except Exception as exc:
+            logger.debug("Could not save raw scan frame: %s", exc)
 
     @staticmethod
     def _display_batch(display: Any) -> Any:
