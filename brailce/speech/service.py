@@ -615,6 +615,21 @@ class SpeechService(SpeechEngine):
         except Exception as e:
             logger.debug("Error setting initial audio volume: %s", e)
 
+        # Loudness boost for the volume-less I2S amp (0 = original sound).
+        try:
+            from brailce.speech.speaker_master import SpeakerMaster
+            SpeakerMaster.configure(
+                boost_db=float(speech_cfg.get("loudness_boost_db", 0.0)),
+                ceiling=float(speech_cfg.get("loudness_ceiling", 28000)),
+                hpf_hz=float(speech_cfg.get("loudness_highpass_hz", 180)),
+            )
+            if SpeakerMaster.active():
+                bank = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "audio")
+                threading.Thread(target=SpeakerMaster.warm_cache, args=(bank,),
+                                 name="loudness-cache", daemon=True).start()
+        except Exception as e:
+            logger.debug("Loudness mastering setup failed: %s", e)
+
         return cls(
             character_engine=main_engine,
             text_engine=main_engine,

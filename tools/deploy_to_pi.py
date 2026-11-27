@@ -193,6 +193,9 @@ def extract_and_apply_remote(host: str, user: str, password: str) -> bool:
         f"tar -xzf /tmp/{BUNDLE_FILENAME} -C {PI_REMOTE_DIR} && "
         f"rm -f /tmp/{BUNDLE_FILENAME} && "
         f"find {PI_REMOTE_DIR} -type d -name '__pycache__' -exec rm -rf {{}} + 2>/dev/null; "
+        # Flush to the SD card before reporting success: a power cut right after an
+        # unsynced extract leaves every extracted file at 0 bytes (app won't start).
+        f"sync && "
         f"echo 'BRAILCE_UPDATE_SUCCESS'"
     )
     hostkey_options = [[], ["-hostkey", PI_HOSTKEY]] if PI_HOSTKEY else [[]]

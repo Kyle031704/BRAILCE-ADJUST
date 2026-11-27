@@ -8,6 +8,7 @@
 #   -SkipDeploy   do not upload to the Pi (the app is still restarted if .env exists)
 #   -SkipGit      do not commit/push to GitHub
 #   -NoLog        do not show the live Pi log at the end
+#   -Message ".." commit message (default: "Update Brailce (<date time>)")
 #
 # The Pi is reached with PuTTY's plink using PI_IP / PI_USER / PI_PASS from .env,
 # so there are no password prompts. Stops at the first failure.
@@ -16,7 +17,8 @@ param(
     [switch]$SkipTests,
     [switch]$SkipDeploy,
     [switch]$SkipGit,
-    [switch]$NoLog
+    [switch]$NoLog,
+    [string]$Message = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -96,7 +98,8 @@ if (-not $SkipGit) {
     if ($staged) {
         Write-Host "`nMga file na i-a-upload:" -ForegroundColor Cyan
         $staged | ForEach-Object { Write-Host "  $_" }
-        git commit -m "LCD redesign (fonts, layout, Braille cells) and coloured Braille scanning" `
+        if (-not $Message) { $Message = "Update Brailce ($(Get-Date -Format 'yyyy-MM-dd HH:mm'))" }
+        git commit -m $Message `
                    -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
         if ($LASTEXITCODE -ne 0) { Fail "pumalya ang commit." }
     } else {
@@ -105,8 +108,8 @@ if (-not $SkipGit) {
     git push -u origin $Branch
     if ($LASTEXITCODE -ne 0) { Fail "pumalya ang push (login o write access sa repo)." }
 
-    Write-Host "`nNa-upload na. Gumawa ng pull request dito:" -ForegroundColor Green
-    Write-Host "  https://github.com/Kyle031704/BRAILCE-ADJUST/compare/master...$Branch"
+    Write-Host "`nNa-upload na sa GitHub ($Branch):" -ForegroundColor Green
+    Write-Host "  https://github.com/Kyle031704/BRAILCE-ADJUST/commits/$Branch"
 }
 
 # Live log from the Pi while you test the device (Ctrl+C to stop)

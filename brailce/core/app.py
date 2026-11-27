@@ -181,7 +181,10 @@ class BrailceApp:
             self.display.set_power_monitor(self.power)
         
         # ---- Vision ----
-        vision_driver = str(self.config.get("vision", "driver", default="usb")).lower()
+        # BRAILCE_VISION_DRIVER overrides config (the test suite sets "simulated" so it
+        # never opens the PC's real webcam).
+        vision_driver = str(os.getenv("BRAILCE_VISION_DRIVER")
+                            or self.config.get("vision", "driver", default="usb")).lower()
         test_image = os.getenv("BRAILCE_TEST_IMAGE") or self.config.get("vision", "test_image_path", default="")
         usb_device = self.config.get("vision", "usb_device", default=0)
         autofocus = bool(self.config.get("vision", "autofocus", default=True))

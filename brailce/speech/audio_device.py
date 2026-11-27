@@ -24,6 +24,7 @@ import logging
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from typing import Optional
@@ -77,8 +78,10 @@ class AudioDeviceCoordinator:
       ~/.asoundrc / /etc/asound.conf; on nonzero exit, timeout, or launch
       failure it retries exactly once on the best hardware card
       (``plughw:<N>,0``).
-    - The WAV file is played whole and unmodified: the ORIGINAL path is
-      passed to aplay. No temp files, no resampling, no gain stage.
+    - The WAV file is played whole: its path is passed to aplay. With
+      speech.loudness_boost_db > 0 it is a cached loudness-mastered COPY
+      (brailce/speech/speaker_master.py: high-pass + gain + peak limiter);
+      at 0 dB it is the original file. No resampling.
     - ``set_volume()`` is the single volume control: it drives the ALSA
       softvol control "Master" via best-effort ``amixer sset`` in a daemon
       thread. Nothing else touches volume.
@@ -213,20 +216,34 @@ class AudioDeviceCoordinator:
             logger.debug("Audio file does not exist: %r", wav_path)
             return False
 
+        # Optional loudness mastering (speech.loudness_boost_db > 0): play a mastered
+        # COPY of the file, still passed whole to aplay. Off (0 dB) = original file.
+        from brailce.speech.speaker_master import SpeakerMaster
+        play_path = SpeakerMaster.mastered_path(wav_path)
+        is_temp_copy = play_path != wav_path and os.path.abspath(wav_path).startswith(
+            os.path.abspath(tempfile.gettempdir()))
+
         if sys.platform != "win32":
-            with cls._lock:
-                if cls._run_aplay(["aplay", "-q", wav_path], owner, timeout):
-                    return True
-                best_dev = _find_best_alsa_device()
-                if best_dev:
-                    if cls._run_aplay(["aplay", "-D", best_dev, "-q", wav_path], owner, timeout):
+            try:
+                with cls._lock:
+                    if cls._run_aplay(["aplay", "-q", play_path], owner, timeout):
                         return True
-                return False
+                    best_dev = _find_best_alsa_device()
+                    if best_dev:
+                        if cls._run_aplay(["aplay", "-D", best_dev, "-q", play_path], owner, timeout):
+                            return True
+                    return False
+            finally:
+                if is_temp_copy:  # one-off live TTS file: do not keep its mastered copy
+                    try:
+                        os.remove(play_path)
+                    except OSError:
+                        pass
         else:
             # Windows fallback
             try:
                 import winsound
-                winsound.PlaySound(wav_path, winsound.SND_FILENAME)
+                winsound.PlaySound(play_path, winsound.SND_FILENAME)
                 return True
             except Exception as exc:
                 logger.debug("winsound playback failed: %s", exc)

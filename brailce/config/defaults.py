@@ -75,6 +75,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "rate": 165,
         "pitch": 52,
         "volume": 100,
+        # Speaker loudness (brailce/speech/speaker_master.py): 0 = original sound.
+        # config.json sets the value measured by ear with tools/loudness_listen_test.py.
+        "loudness_boost_db": 0.0,
+        "loudness_ceiling": 28000,
+        "loudness_highpass_hz": 180,
         "filipino_pitch_semitones": 3.5,
         "word_gap_ms": 5,
         "speak_each_character": True,
